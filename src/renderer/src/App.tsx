@@ -13,6 +13,8 @@ import {
   ExternalLink,
   Layers,
   LayoutDashboard,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   Repeat2,
@@ -45,6 +47,7 @@ import {
   parseAmount,
   totals
 } from '../../shared/billing'
+import { useSidebar } from './useSidebar'
 
 type MainPage = 'overview' | 'list' | 'calendar' | 'settings'
 type Route =
@@ -150,6 +153,7 @@ function BillRows({ bills, onOpen }: { bills: Bill[]; onOpen: (id: string) => vo
 }
 
 export function App() {
+  const { collapsed, toggle } = useSidebar()
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [route, setRoute] = useState<Route>({ page: 'overview' })
   const [currency, setCurrency] = useState<Currency>('CNY')
@@ -247,23 +251,29 @@ export function App() {
         </header>
         <div className="stats">
           <div className="stat featured">
-            <span>月均费用</span>
+            <div className="stat-heading">
+              <span>月均费用</span>
+              <small>按当前价格折算</small>
+            </div>
             <strong>{formatMoney(summary.monthly, currency)}</strong>
-            <small>按当前续费价格折算</small>
           </div>
           <div className="stat">
-            <span>年度折算费用</span>
+            <div className="stat-heading">
+              <span>年度折算费用</span>
+              <small>
+                {summary.count} 项自动续费 · {currency}
+              </small>
+            </div>
             <strong>{formatMoney(summary.annual, currency)}</strong>
-            <small>
-              {summary.count} 项自动续费 · {currency}
-            </small>
           </div>
           <div className="stat">
-            <span>未来 30 天预计扣款</span>
+            <div className="stat-heading">
+              <span>未来 30 天预计扣款</span>
+              <small title={`${today} 至 ${addDays(today, 29)}`}>
+                {today.slice(5)} — {addDays(today, 29).slice(5)}
+              </small>
+            </div>
             <strong>{formatMoney(summary.upcoming, currency)}</strong>
-            <small>
-              {today.slice(5)} — {addDays(today, 29).slice(5)}
-            </small>
           </div>
         </div>
         {trial && (
@@ -338,9 +348,6 @@ export function App() {
               )
             })}
             {!summary.monthly && <Empty>添加订阅后，分类支出会显示在这里。</Empty>}
-            <p className="footnote">
-              试用按转付费后的价格折算。不同币种分别统计，所有扣款均为预计。
-            </p>
           </Panel>
         </div>
       </>
@@ -796,107 +803,133 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span>
-            <Repeat2 size={22} />
-          </span>
-          续订
-        </div>
-        <div className="workspace-label">个人空间</div>
-        <nav aria-label="主导航">
-          {navItems.map(({ page, icon: Icon }) => (
-            <button
-              key={page}
-              aria-current={currentPage === page ? 'page' : undefined}
-              onClick={() => go(page)}
-            >
-              <Icon size={19} />
-              <span>{pageNames[page]}</span>
-              {page === 'list' && (
-                <small>{data.filter((s) => s.status !== 'archived').length}</small>
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <span className="local-dot" />
-          <div>
-            本地存储<small>你的订阅，你的数据。</small>
-          </div>
-        </div>
-      </aside>
-      <main className="main">
-        <div className="eyebrow">SUBSCRIPTIONS, SIMPLIFIED</div>
-        {error && (
-          <div role="alert" className="error-banner">
-            <span>{error}</span>
-            <button className="icon-button" aria-label="关闭错误提示" onClick={() => setError('')}>
-              <X size={16} />
-            </button>
-          </div>
-        )}
-        {!snapshot ? (
-          <Empty>
-            {error ? (
-              <button
-                className="secondary"
-                onClick={() =>
-                  void perform(async () => {
-                    await reload()
-                  })
-                }
-              >
-                重新加载
-              </button>
+    <>
+      <header className="window-titlebar">
+        <div className="titlebar-safe-area">
+          <button
+            className="sidebar-toggle"
+            onClick={toggle}
+            aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
+            aria-expanded={!collapsed}
+            aria-controls="main-navigation"
+            aria-keyshortcuts="Control+B Meta+B"
+            title={`${collapsed ? '展开' : '收起'}侧栏 (Ctrl+B)`}
+          >
+            {collapsed ? (
+              <PanelLeftOpen size={18} aria-hidden="true" />
             ) : (
-              '正在读取本地订阅…'
+              <PanelLeftClose size={18} aria-hidden="true" />
             )}
-          </Empty>
-        ) : route.page === 'overview' ? (
-          overview()
-        ) : route.page === 'list' ? (
-          list()
-        ) : route.page === 'calendar' ? (
-          calendar()
-        ) : route.page === 'settings' ? (
-          settings()
-        ) : route.page === 'detail' ? (
-          selected ? (
-            detail(selected, route.from)
-          ) : (
-            <Empty>
-              订阅不存在。
-              <button className="text-button" onClick={() => go('list')}>
-                返回列表
-              </button>
-            </Empty>
-          )
-        ) : (
-          <SubscriptionForm
-            key={route.id || 'new'}
-            subscription={selected}
-            busy={busy}
-            onCancel={() => (route.id ? openDetail(route.id, route.from) : go('list'))}
-            onSave={(input) =>
-              void perform(async () => {
-                const item = unwrap(await window.desktop.save(input, route.id))
-                await reload()
-                openDetail(item.id, route.from)
-                setNotice('订阅已保存。')
-              })
-            }
-          />
-        )}
-        {notice && (
-          <div className="toast" role="status">
-            <Check size={16} />
-            {notice}
+          </button>
+        </div>
+      </header>
+      <div className={`app-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
+        <aside className="sidebar">
+          <div className="brand">
+            <span className="brand-mark" aria-hidden="true">
+              <Repeat2 size={22} />
+            </span>
+            <span className="brand-name">续订</span>
           </div>
-        )}
-      </main>
-    </div>
+          <nav id="main-navigation" aria-label="主导航">
+            {navItems.map(({ page, icon: Icon }) => (
+              <button
+                key={page}
+                aria-label={pageNames[page]}
+                title={collapsed ? pageNames[page] : undefined}
+                aria-current={currentPage === page ? 'page' : undefined}
+                onClick={() => go(page)}
+              >
+                <Icon size={19} aria-hidden="true" />
+                <span className="nav-label">{pageNames[page]}</span>
+                {page === 'list' && (
+                  <small>{data.filter((s) => s.status !== 'archived').length}</small>
+                )}
+              </button>
+            ))}
+          </nav>
+          <div className="sidebar-bottom" title={collapsed ? '本地存储' : undefined}>
+            <span className="local-dot" />
+            <div className="storage-label">
+              本地存储<small>你的订阅，你的数据。</small>
+            </div>
+          </div>
+        </aside>
+        <main className="main">
+          <div className="eyebrow">SUBSCRIPTIONS, SIMPLIFIED</div>
+          {error && (
+            <div role="alert" className="error-banner">
+              <span>{error}</span>
+              <button
+                className="icon-button"
+                aria-label="关闭错误提示"
+                onClick={() => setError('')}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          {!snapshot ? (
+            <Empty>
+              {error ? (
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    void perform(async () => {
+                      await reload()
+                    })
+                  }
+                >
+                  重新加载
+                </button>
+              ) : (
+                '正在读取本地订阅…'
+              )}
+            </Empty>
+          ) : route.page === 'overview' ? (
+            overview()
+          ) : route.page === 'list' ? (
+            list()
+          ) : route.page === 'calendar' ? (
+            calendar()
+          ) : route.page === 'settings' ? (
+            settings()
+          ) : route.page === 'detail' ? (
+            selected ? (
+              detail(selected, route.from)
+            ) : (
+              <Empty>
+                订阅不存在。
+                <button className="text-button" onClick={() => go('list')}>
+                  返回列表
+                </button>
+              </Empty>
+            )
+          ) : (
+            <SubscriptionForm
+              key={route.id || 'new'}
+              subscription={selected}
+              busy={busy}
+              onCancel={() => (route.id ? openDetail(route.id, route.from) : go('list'))}
+              onSave={(input) =>
+                void perform(async () => {
+                  const item = unwrap(await window.desktop.save(input, route.id))
+                  await reload()
+                  openDetail(item.id, route.from)
+                  setNotice('订阅已保存。')
+                })
+              }
+            />
+          )}
+          {notice && (
+            <div className="toast" role="status">
+              <Check size={16} />
+              {notice}
+            </div>
+          )}
+        </main>
+      </div>
+    </>
   )
 }
 

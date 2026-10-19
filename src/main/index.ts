@@ -136,6 +136,8 @@ function createWindow(): void {
     minHeight: 620,
     show: false,
     title: '续订',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#f5f6f4', symbolColor: '#243229', height: 38 },
     backgroundColor: '#f5f6f4',
     icon: app.isPackaged
       ? join(process.resourcesPath, 'icon.png')
