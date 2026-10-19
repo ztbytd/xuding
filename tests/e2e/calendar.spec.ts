@@ -9,6 +9,8 @@ test('compact calendar filters bills and adapts to window width', async ({}, tes
   const app = await electron.launch({ args: ['.'], env: { ...env, XUDING_DATA_DIR: userData } })
   try {
     const page = await app.firstWindow()
+    // CI desktops may clamp native windows to 1024px; exercise explicit renderer widths.
+    await page.setViewportSize({ width: 1220, height: 860 })
     await page.clock.setFixedTime(new Date('2026-10-19T12:00:00+08:00'))
     await page.reload()
     await page.getByRole('heading', { name: '每一笔订阅，心里有数。' }).waitFor()
@@ -79,7 +81,7 @@ test('compact calendar filters bills and adapts to window width', async ({}, tes
     })
     await page.getByRole('button', { name: '本月', exact: true }).click()
     await expect(day).toBeVisible()
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 700))
+    await page.setViewportSize({ width: 800, height: 700 })
     await expect
       .poll(async () => (await details.boundingBox())!.y)
       .toBeGreaterThan((await panel.boundingBox())!.y + (await panel.boundingBox())!.height)
@@ -91,7 +93,7 @@ test('compact calendar filters bills and adapts to window width', async ({}, tes
     })
     await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
     await expect(page.getByRole('heading', { name: '扣款日历', exact: true })).toBeVisible()
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1220, 860))
+    await page.setViewportSize({ width: 1220, height: 860 })
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1220)
     await expect
       .poll(async () => (await details.boundingBox())!.x)
