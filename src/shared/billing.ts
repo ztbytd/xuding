@@ -1,4 +1,7 @@
 import type { Bill, Currency, Subscription } from './model'
+import { categories } from './model'
+import { convertMinor } from './exchange'
+import type { ExchangeRates } from './exchange'
 
 export function localDate(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -62,16 +65,46 @@ export function forecast(
 export function monthlyMinor(s: Subscription): number {
   return s.amountMinor / periodMonths(s)
 }
-export function totals(subscriptions: Subscription[], currency: Currency, today: string) {
-  const selected = subscriptions.filter((s) => s.currency === currency && isRenewing(s))
-  const monthly = selected.reduce((sum, s) => sum + monthlyMinor(s), 0)
+export function totals(
+  subscriptions: Subscription[],
+  currency: Currency,
+  today: string,
+  rates: ExchangeRates | null = null
+) {
+  const selected = subscriptions.filter(isRenewing)
+  const missing = [
+    ...new Set(
+      selected
+        .filter((s) => convertMinor(s.amountMinor, s.currency, currency, rates) === null)
+        .map((s) => s.currency)
+    )
+  ]
+  const sum = (values: (number | null)[]): number | null =>
+    values.some((value) => value === null)
+      ? null
+      : values.reduce<number>((n, value) => n + value!, 0)
+  const monthly = sum(
+    selected.map((s) => convertMinor(monthlyMinor(s), s.currency, currency, rates))
+  )
   const bills = forecast(selected, today, addDays(today, 29))
+  const upcoming = sum(
+    bills.map((b) => convertMinor(b.amountMinor, b.subscription.currency, currency, rates))
+  )
   return {
-    monthly: Math.round(monthly),
-    annual: Math.round(monthly * 12),
-    upcoming: bills.reduce((n, b) => n + b.amountMinor, 0),
+    monthly: monthly === null ? null : Math.round(monthly),
+    annual: monthly === null ? null : Math.round(monthly * 12),
+    upcoming: upcoming === null ? null : Math.round(upcoming),
     count: selected.length,
-    bills
+    bills,
+    missing,
+    categories: categories.map((category) => {
+      const amount = sum(
+        selected
+          .filter((s) => s.category === category)
+          .map((s) => convertMinor(monthlyMinor(s), s.currency, currency, rates))
+      )
+      return { category, amount: amount === null ? null : Math.round(amount) }
+    })
   }
 }
 export function formatMoney(minor: number, currency: Currency): string {

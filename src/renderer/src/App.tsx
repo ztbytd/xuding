@@ -18,6 +18,7 @@ import {
   Pencil,
   Plus,
   Repeat2,
+  RefreshCw,
   Search,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -49,6 +50,8 @@ import {
 } from '../../shared/billing'
 import { useSidebar } from './useSidebar'
 import { HelpTip, SelectField } from './controls'
+import { convertMinor } from '../../shared/exchange'
+import type { ExchangeRates } from '../../shared/exchange'
 
 type MainPage = 'overview' | 'list' | 'calendar' | 'settings'
 type Route =
@@ -146,7 +149,17 @@ function SubscriptionAvatar({
     </span>
   )
 }
-function BillRows({ bills, onOpen }: { bills: Bill[]; onOpen: (id: string) => void }) {
+function BillRows({
+  bills,
+  onOpen,
+  displayCurrency,
+  rates = null
+}: {
+  bills: Bill[]
+  onOpen: (id: string) => void
+  displayCurrency?: Currency
+  rates?: ExchangeRates | null
+}) {
   return (
     <div>
       {bills.map((b) => (
@@ -167,8 +180,19 @@ function BillRows({ bills, onOpen }: { bills: Bill[]; onOpen: (id: string) => vo
             </small>
           </span>
           <span className="row-price">
-            <strong>{formatMoney(b.amountMinor, b.subscription.currency)}</strong>
-            <small>{cycleLabel(b.subscription)}</small>
+            <strong>
+              {displayCurrency && displayCurrency !== b.subscription.currency
+                ? convertMinor(b.amountMinor, b.subscription.currency, displayCurrency, rates) ===
+                  null
+                  ? '待换算'
+                  : `≈ ${formatMoney(Math.round(convertMinor(b.amountMinor, b.subscription.currency, displayCurrency, rates)!), displayCurrency)}`
+                : formatMoney(b.amountMinor, b.subscription.currency)}
+            </strong>
+            <small>
+              {displayCurrency && displayCurrency !== b.subscription.currency
+                ? `原币 ${formatMoney(b.amountMinor, b.subscription.currency)}`
+                : cycleLabel(b.subscription)}
+            </small>
           </span>
           <ChevronRight size={16} className="chevron" />
         </button>
@@ -182,6 +206,10 @@ export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [route, setRoute] = useState<Route>({ page: 'overview' })
   const [currency, setCurrency] = useState<Currency>('CNY')
+  const [calendarCurrency, setCalendarCurrency] = useState<Currency>('CNY')
+  const [ratesLoading, setRatesLoading] = useState(false)
+  const [ratesError, setRatesError] = useState<string | null>(null)
+  const ratesPending = useRef(false)
   const initializedCurrency = useRef(false)
   const chooseCurrency = useCallback((value: Currency) => {
     setCurrency(value)
@@ -212,13 +240,7 @@ export function App() {
       } catch {
         /* Use available subscriptions. */
       }
-      const current = value.subscriptions.filter((s) => s.status !== 'archived')
-      const preferred = current.find((s) => s.currency === 'CNY') ?? current[0]
-      chooseCurrency(
-        currencies.includes(saved as Currency)
-          ? (saved as Currency)
-          : (preferred?.currency ?? 'CNY')
-      )
+      chooseCurrency(currencies.includes(saved as Currency) ? (saved as Currency) : 'CNY')
     }
     setSnapshot(value)
     return value
@@ -251,6 +273,30 @@ export function App() {
     }
   }
   const data = snapshot?.subscriptions || []
+  const rates = snapshot?.exchangeRates ?? null
+  const needsExchange = data.some(
+    (s) => isRenewing(s) && s.currency !== currency && s.amountMinor > 0
+  )
+  const refreshRates = useCallback(async (force = false) => {
+    if (ratesPending.current) return
+    ratesPending.current = true
+    setRatesLoading(true)
+    try {
+      const result = unwrap(await window.desktop.exchangeRates(force))
+      setSnapshot((previous) =>
+        previous ? { ...previous, exchangeRates: result.table } : previous
+      )
+      setRatesError(result.error)
+    } catch {
+      setRatesError('暂时无法更新汇率，请重试。')
+    } finally {
+      ratesPending.current = false
+      setRatesLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    if (needsExchange && route.page === 'overview') void refreshRates()
+  }, [needsExchange, route.page, today, refreshRates])
   const selected = 'id' in route ? data.find((s) => s.id === route.id) : undefined
   const currentPage = route.page === 'detail' || route.page === 'edit' ? 'list' : route.page
   const openDetail = (id: string, from: MainPage) => setRoute({ page: 'detail', id, from })
@@ -278,20 +324,15 @@ export function App() {
   )
 
   function overview() {
-    const summary = totals(data, currency, today)
+    const summary = totals(data, currency, today, rates)
     const current = data.filter((s) => s.status !== 'archived')
-    const inCurrency = current.filter((s) => s.currency === currency)
-    const paused = inCurrency.filter((s) => !s.autoRenew).length
-    const otherCurrencies = currencies.filter(
-      (c) => c !== currency && current.some((s) => s.currency === c)
-    )
+    const paused = current.filter((s) => !s.autoRenew).length
+    const money = (amount: number | null) => (amount === null ? '—' : formatMoney(amount, currency))
     const emptyReason = !current.length
       ? '还没有当前订阅。'
-      : !inCurrency.length
-        ? `当前没有 ${currency} 订阅，可切换上方币种查看。`
-        : !summary.count
-          ? `当前 ${inCurrency.length} 项订阅均已关闭续费，未计入预计支出。`
-          : '当前币种下，未来 30 天没有预计扣款。'
+      : !summary.count
+        ? `当前 ${current.length} 项订阅均已关闭续费，未计入预计支出。`
+        : '未来 30 天没有预计扣款。'
     const trial = summary.bills.find(
       (b) =>
         b.subscription.status === 'trial' &&
@@ -313,28 +354,55 @@ export function App() {
         {current.length > 0 && (
           <div className="overview-context">
             <span>
-              {currency} · {inCurrency.length} 项订阅
+              统一折算为 {currency} · {summary.count} 项续费订阅
               {paused > 0 && ` · ${paused} 项续费已关闭，不计入预计支出`}
             </span>
-            {otherCurrencies.length > 0 && (
-              <span className="currency-shortcuts">
-                其他币种
-                {otherCurrencies.map((c) => (
-                  <button key={c} className="text-button" onClick={() => chooseCurrency(c)}>
-                    查看 {c}
-                  </button>
-                ))}
+            {needsExchange && (
+              <span className="exchange-status">
+                <span>
+                  {ratesLoading
+                    ? '正在更新汇率…'
+                    : ratesError
+                      ? rates
+                        ? '更新失败 · 使用缓存'
+                        : '暂缺汇率'
+                      : rates
+                        ? `参考汇率 ${rates.date}${daysBetween(rates.date, today) > 7 ? ' · 缓存较旧' : ''}`
+                        : '等待汇率'}
+                </span>
+                <HelpTip label="汇率" placement="bottom">
+                  来源：Frankfurter / 欧洲央行。
+                  {rates
+                    ? `参考日期：${rates.date}；获取时间：${new Date(rates.fetchedAt).toLocaleString('zh-CN')}。`
+                    : '尚无本地汇率缓存。'}
+                  每天首次需要换算时更新，离线使用缓存。换算仅用于估算，不含银行手续费，原始订阅金额不变。
+                  {ratesError}
+                </HelpTip>
+                <button
+                  className="text-button"
+                  disabled={ratesLoading}
+                  onClick={() => void refreshRates(true)}
+                >
+                  <RefreshCw size={13} />
+                  刷新汇率
+                </button>
               </span>
             )}
+          </div>
+        )}
+        {summary.missing.length > 0 && (
+          <div className="exchange-notice" role="status">
+            {ratesLoading ? '正在获取' : '缺少'} {summary.missing.join('、')} → {currency}{' '}
+            汇率，完整汇总暂不可用。扣款明细保留原币金额。
           </div>
         )}
         <div className="stats">
           <div className="stat featured">
             <div className="stat-heading">
               <span>月均费用</span>
-              <small>按当前价格折算</small>
+              <small>全部币种 · 参考估算</small>
             </div>
-            <strong>{formatMoney(summary.monthly, currency)}</strong>
+            <strong>{money(summary.monthly)}</strong>
           </div>
           <div className="stat">
             <div className="stat-heading">
@@ -343,7 +411,7 @@ export function App() {
                 {summary.count} 项自动续费 · {currency}
               </small>
             </div>
-            <strong>{formatMoney(summary.annual, currency)}</strong>
+            <strong>{money(summary.annual)}</strong>
           </div>
           <div className="stat">
             <div className="stat-heading">
@@ -352,7 +420,7 @@ export function App() {
                 {today.slice(5)} — {addDays(today, 29).slice(5)}
               </small>
             </div>
-            <strong>{formatMoney(summary.upcoming, currency)}</strong>
+            <strong>{money(summary.upcoming)}</strong>
           </div>
         </div>
         {trial && (
@@ -360,7 +428,7 @@ export function App() {
             <Bell size={18} />
             <span>
               {trial.subscription.name} 将于 {formatDate(trial.due)} 结束试用，预计扣款{' '}
-              {formatMoney(trial.amountMinor, currency)}
+              {formatMoney(trial.amountMinor, trial.subscription.currency)}（原币）
             </span>
             <button
               className="text-button"
@@ -384,6 +452,8 @@ export function App() {
             {summary.bills.length ? (
               <BillRows
                 bills={summary.bills.slice(0, 5)}
+                displayCurrency={currency}
+                rates={rates}
                 onOpen={(id) => openDetail(id, 'overview')}
               />
             ) : (
@@ -404,30 +474,35 @@ export function App() {
             )}
           </Panel>
           <Panel title="钱花在哪儿" extra={<span className="muted small">月均 · {currency}</span>}>
-            {categories.map((c) => {
-              const amount = data
-                .filter((s) => isRenewing(s) && s.currency === currency && s.category === c)
-                .reduce((n, s) => n + monthlyMinor(s), 0)
-              return (
-                amount > 0 && (
-                  <div className="bar-row" key={c}>
-                    <div>
-                      <span>{c}</span>
-                      <span>{formatMoney(Math.round(amount), currency)}</span>
+            {summary.monthly !== null &&
+              summary.categories.map(({ category: c, amount }) => {
+                return (
+                  amount !== null &&
+                  amount > 0 && (
+                    <div className="bar-row" key={c}>
+                      <div>
+                        <span>{c}</span>
+                        <span>{formatMoney(Math.round(amount), currency)}</span>
+                      </div>
+                      <div className="bar-track">
+                        <div
+                          style={{
+                            width: `${Math.min(100, (amount / Math.max(1, summary.monthly!)) * 100)}%`
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div className="bar-track">
-                      <div
-                        style={{
-                          width: `${Math.min(100, (amount / Math.max(1, summary.monthly)) * 100)}%`
-                        }}
-                      />
-                    </div>
-                  </div>
+                  )
                 )
-              )
-            })}
+              })}
             {!summary.monthly && (
-              <Empty>{summary.count ? '当前续费订阅金额为 0，暂无分类支出。' : emptyReason}</Empty>
+              <Empty>
+                {summary.monthly === null
+                  ? '补齐汇率后显示完整分类支出。'
+                  : summary.count
+                    ? '当前续费订阅金额为 0，暂无分类支出。'
+                    : emptyReason}
+              </Empty>
             )}
           </Panel>
         </div>
@@ -679,6 +754,7 @@ export function App() {
     const days = new Date(Date.UTC(year, number, 0)).getUTCDate(),
       end = `${month}-${days}`
     const offset = (new Date(first + 'T00:00:00Z').getUTCDay() + 6) % 7
+    const currency = calendarCurrency
     const bills = forecast(data, first, end, currency),
       shown = selectedDate ? bills.filter((b) => b.due === selectedDate) : bills
     function shift(delta: number) {
@@ -693,7 +769,15 @@ export function App() {
             <h1>扣款日历</h1>
             <p>提前看见每一笔计划中的支出</p>
           </div>
-          {currencyPicker}
+          <label className="currency-picker">
+            <span>筛选币种</span>
+            <SelectField
+              label="筛选币种"
+              value={calendarCurrency}
+              onChange={(value) => setCalendarCurrency(value as Currency)}
+              options={currencies.map((c) => ({ value: c, label: currencyNames[c] }))}
+            />
+          </label>
         </header>
         <div className="calendar-view">
           <div className="calendar-layout">
@@ -1010,8 +1094,6 @@ export function App() {
                 void perform(async () => {
                   const item = unwrap(await window.desktop.save(input, route.id))
                   await reload()
-                  if (!selected || selected.currency !== item.currency)
-                    chooseCurrency(item.currency)
                   openDetail(item.id, route.from)
                   setNotice('订阅已保存。')
                 })

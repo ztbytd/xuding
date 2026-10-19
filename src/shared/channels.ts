@@ -1,5 +1,6 @@
 export const channels = {
   load: 'subscriptions:load',
+  exchangeRates: 'exchange:rates',
   pickIcon: 'subscriptions:pick-icon',
   save: 'subscriptions:save',
   archive: 'subscriptions:archive',

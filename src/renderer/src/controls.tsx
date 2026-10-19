@@ -114,12 +114,20 @@ export function SelectField({
   )
 }
 
-export function HelpTip({ label, children }: { label: string; children: ReactNode }) {
+export function HelpTip({
+  label,
+  children,
+  placement = 'top'
+}: {
+  label: string
+  children: ReactNode
+  placement?: 'top' | 'bottom'
+}) {
   return (
     <Tooltip
       title={children}
       trigger={['hover', 'focus', 'click']}
-      placement="top"
+      placement={placement}
       styles={{ root: { maxWidth: 320 } }}
     >
       <button type="button" className="help-tip" aria-label={`${label}说明`}>

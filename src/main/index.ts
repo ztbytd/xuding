@@ -5,6 +5,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  net,
   Notification,
   shell
 } from 'electron'
@@ -15,6 +16,7 @@ import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import { SubscriptionRepository } from './database'
+import { ExchangeService } from './exchange'
 import { backupSchema, settingsSchema, subscriptionInputSchema } from '../shared/model'
 import { channels } from '../shared/channels'
 import type { Result } from '../shared/model'
@@ -28,6 +30,7 @@ if (process.env.XUDING_DATA_DIR && isAbsolute(process.env.XUDING_DATA_DIR)) {
 app.setAppUserModelId('io.github.ztbytd.xuding')
 let window: BrowserWindow | null = null
 let repository: SubscriptionRepository
+let exchange: ExchangeService
 let reminderTimer: ReturnType<typeof setInterval> | undefined
 const devUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const rendererPath = join(__dirname, '../renderer/index.html')
@@ -59,6 +62,7 @@ function handle(channel: string, handler: (...args: any[]) => unknown): void {
 }
 
 function registerApi(): void {
+  handle(channels.exchangeRates, (force) => exchange.get(z.boolean().optional().parse(force)))
   handle(channels.pickIcon, async () => {
     if (!window) return null
     const picked = await dialog.showOpenDialog(window, {
@@ -82,6 +86,7 @@ function registerApi(): void {
   handle(channels.load, () => ({
     subscriptions: repository.list(),
     settings: repository.settings(),
+    exchangeRates: repository.exchangeRates(),
     version: app.getVersion()
   }))
   handle(channels.save, (raw, id) =>
@@ -207,6 +212,7 @@ else {
     .then(async () => {
       await mkdir(app.getPath('userData'), { recursive: true })
       repository = new SubscriptionRepository(join(app.getPath('userData'), 'xuding.db'))
+      exchange = new ExchangeService(repository, (input, init) => net.fetch(input, init))
       registerApi()
       createWindow()
       const reminders = () => {

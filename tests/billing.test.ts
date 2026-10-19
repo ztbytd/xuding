@@ -48,11 +48,8 @@ describe('billing rules', () => {
     expect(nextBills(subscription({ status: 'archived' }), '2026-10-19')).toEqual([])
     expect(nextBills(subscription({ autoRenew: false }), '2026-10-19')).toEqual([])
   })
-  it('keeps annual amortization separate from cash flow and currencies', () => {
-    const data = [
-      subscription({ cycle: 'year', anchorDate: '2026-10-22' }),
-      subscription({ id: 'different', currency: 'USD', amountMinor: 99999 })
-    ]
+  it('keeps annual amortization separate from cash flow', () => {
+    const data = [subscription({ cycle: 'year', anchorDate: '2026-10-22' })]
     expect(totals(data, 'CNY', '2026-10-19')).toMatchObject({
       monthly: 1000,
       annual: 12000,

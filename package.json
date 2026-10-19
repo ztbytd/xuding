@@ -1,6 +1,6 @@
 {
   "name": "xuding",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "续订 — 本地优先的开源桌面订阅管理器",
   "main": "out/main/index.js",
   "author": "ztbytd",

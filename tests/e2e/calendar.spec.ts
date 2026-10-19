@@ -2,6 +2,7 @@ import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
+import { mockExchange } from './exchange-fixture'
 
 test('compact calendar filters bills and adapts to window width', async ({}, testInfo) => {
   const userData = await mkdtemp(join(tmpdir(), 'xuding-calendar-'))
@@ -9,6 +10,7 @@ test('compact calendar filters bills and adapts to window width', async ({}, tes
   const app = await electron.launch({ args: ['.'], env: { ...env, XUDING_DATA_DIR: userData } })
   try {
     const page = await app.firstWindow()
+    await mockExchange(app)
     // CI desktops may clamp native windows to 1024px; exercise explicit renderer widths.
     await page.setViewportSize({ width: 1220, height: 860 })
     await page.clock.setFixedTime(new Date('2026-10-19T12:00:00+08:00'))
@@ -102,11 +104,11 @@ test('compact calendar filters bills and adapts to window width', async ({}, tes
       path: testInfo.outputPath('calendar-dark.png'),
       animations: 'disabled'
     })
-    await page.getByRole('combobox', { name: '统计币种' }).click()
+    await page.getByRole('combobox', { name: '筛选币种' }).click()
     await page.getByRole('option', { name: '美元 USD', exact: true }).click()
     await expect(details.locator('.subscription-row')).toHaveCount(1)
     await expect(details).toContainText('外币会员')
-    await page.getByRole('combobox', { name: '统计币种' }).click()
+    await page.getByRole('combobox', { name: '筛选币种' }).click()
     await page.getByRole('option', { name: '欧元 EUR', exact: true }).click()
     await expect(details).toContainText('本月没有预计扣款。')
   } finally {

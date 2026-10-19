@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { ExchangeRates, ExchangeResult } from './exchange'
 
 export const currencies = ['CNY', 'USD', 'EUR', 'HKD'] as const
 export const categories = [
@@ -81,7 +82,12 @@ export const backupSchema = z
   )
 export type Backup = z.infer<typeof backupSchema>
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string }
-export type Snapshot = { subscriptions: Subscription[]; settings: Settings; version: string }
+export type Snapshot = {
+  subscriptions: Subscription[]
+  settings: Settings
+  version: string
+  exchangeRates: ExchangeRates | null
+}
 
 export interface DesktopApi {
   load(): Promise<Result<Snapshot>>
@@ -92,4 +98,5 @@ export interface DesktopApi {
   importBackup(): Promise<Result<number | null>>
   openWebsite(url: string): Promise<Result<void>>
   pickIcon(): Promise<Result<string | null>>
+  exchangeRates(force?: boolean): Promise<Result<ExchangeResult>>
 }

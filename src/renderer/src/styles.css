@@ -486,10 +486,19 @@ small {
   font-size: 12px;
   color: var(--muted);
 }
-.currency-shortcuts {
+.exchange-status {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
+}
+.exchange-notice {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 12px;
 }
 .row-title {
   display: flex;

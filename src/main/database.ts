@@ -7,6 +7,8 @@ import {
   subscriptionSchema
 } from '../shared/model'
 import type { Backup, Settings, Subscription, SubscriptionInput } from '../shared/model'
+import { exchangeRatesSchema } from '../shared/exchange'
+import type { ExchangeRates } from '../shared/exchange'
 
 export class SubscriptionRepository {
   private db: DatabaseSync
@@ -109,6 +111,21 @@ export class SubscriptionRepository {
       exportedAt: new Date().toISOString(),
       subscriptions: this.list()
     }
+  }
+  exchangeRates(): ExchangeRates | null {
+    const row = this.db.prepare("SELECT value FROM settings WHERE key='exchange-rates'").get()
+    try {
+      return row ? exchangeRatesSchema.parse(JSON.parse(String(row.value))) : null
+    } catch {
+      return null
+    }
+  }
+  saveExchangeRates(table: ExchangeRates): void {
+    this.db
+      .prepare(
+        "INSERT INTO settings(key,value) VALUES('exchange-rates',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+      )
+      .run(JSON.stringify(exchangeRatesSchema.parse(table)))
   }
   import(raw: unknown): number {
     const backup = backupSchema.parse(raw)

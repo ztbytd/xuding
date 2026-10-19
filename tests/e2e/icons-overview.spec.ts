@@ -2,14 +2,16 @@ import { test, expect, _electron as electron } from '@playwright/test'
 import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
+import { mockExchange } from './exchange-fixture'
 
-test('icons persist in backups and overview explains currency and renewal filters', async ({}, testInfo) => {
+test('icons persist in backups and overview explains renewal status', async ({}, testInfo) => {
   const userData = await mkdtemp(join(tmpdir(), 'xuding-icons-'))
   const { ELECTRON_RUN_AS_NODE: _, ...env } = process.env
   const launch = () => electron.launch({ args: ['.'], env: { ...env, XUDING_DATA_DIR: userData } })
   let app = await launch()
   try {
     let page = await app.firstWindow()
+    await mockExchange(app)
     const errors: string[] = []
     page.on('pageerror', (e) => errors.push(e.message))
     const go = (name: string) =>
@@ -47,22 +49,22 @@ test('icons persist in backups and overview explains currency and renewal filter
     expect(item.icon!.length).toBeLessThan(100_000)
     await rm(iconFile)
     await go('总览')
-    await expect(page.locator('.currency-picker')).toContainText('美元 USD')
+    await expect(page.locator('.currency-picker')).toContainText('人民币 CNY')
     await expect(page.locator('.stats .stat > strong')).toHaveText([
-      'US$100.00',
-      'US$1,200.00',
-      'US$100.00'
+      '¥720.00',
+      '¥8,640.00',
+      '¥720.00'
     ])
-    await expect(page.locator('.bar-row')).toContainText('US$100.00')
+    await expect(page.locator('.bar-row')).toContainText('¥720.00')
     await expect(page.getByRole('img', { name: 'Chatgpt-pro图标' })).toBeVisible()
     await page.screenshot({
       path: testInfo.outputPath('overview-active.png'),
       animations: 'disabled'
     })
-    // Existing USD-only data also chooses USD on first use, without relying on save navigation.
+    // A USD-only ledger must not override the default display currency.
     await page.evaluate(() => localStorage.removeItem('xuding.currency'))
     await page.reload()
-    await expect(page.locator('.currency-picker')).toContainText('美元 USD')
+    await expect(page.locator('.currency-picker')).toContainText('人民币 CNY')
     await go('我的订阅')
     await page.getByRole('button', { name: '查看 Chatgpt-pro 详情', exact: true }).click()
     await page.getByRole('button', { name: '编辑订阅', exact: true }).click()
@@ -77,11 +79,7 @@ test('icons persist in backups and overview explains currency and renewal filter
     await page.getByRole('button', { name: '保存修改', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Chatgpt-pro', exact: true })).toBeVisible()
     await go('总览')
-    await expect(page.locator('.stats .stat > strong')).toHaveText([
-      'US$0.00',
-      'US$0.00',
-      'US$0.00'
-    ])
+    await expect(page.locator('.stats .stat > strong')).toHaveText(['¥0.00', '¥0.00', '¥0.00'])
     await expect(page.locator('.overview-context')).toContainText('1 项续费已关闭，不计入预计支出')
     await expect(page.getByText('添加订阅后，分类支出会显示在这里。')).toHaveCount(0)
     await page.screenshot({
@@ -89,11 +87,9 @@ test('icons persist in backups and overview explains currency and renewal filter
       animations: 'disabled'
     })
     await page.getByRole('combobox', { name: '统计币种' }).click()
-    await page.getByRole('option', { name: '人民币 CNY', exact: true }).click()
-    await expect(page.locator('.overview-columns')).toContainText('当前没有 CNY 订阅')
+    await page.getByRole('option', { name: '美元 USD', exact: true }).click()
+    await expect(page.locator('.overview-columns')).toContainText('均已关闭续费')
     await page.reload()
-    await expect(page.locator('.currency-picker')).toContainText('人民币 CNY')
-    await page.getByRole('button', { name: '查看 USD', exact: true }).click()
     await expect(page.locator('.currency-picker')).toContainText('美元 USD')
     await go('我的订阅')
     const row = page.getByRole('button', { name: '查看 Chatgpt-pro 详情', exact: true })
