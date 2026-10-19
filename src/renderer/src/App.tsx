@@ -826,7 +826,7 @@ export function App() {
           </button>
           <div className="brand">
             <span className="brand-mark" aria-hidden="true">
-              <Repeat2 size={22} />
+              <Repeat2 size={18} />
             </span>
             <span className="brand-name">续订</span>
           </div>
@@ -977,19 +977,20 @@ function SubscriptionForm({
   }
   return (
     <>
-      <button className="back" disabled={busy} onClick={onCancel}>
-        <ArrowLeft size={16} />
-        {s ? '返回订阅详情' : '返回我的订阅'}
-      </button>
-      <header className="page-head">
-        <div>
-          <h1>{s ? '编辑订阅' : '新增订阅'}</h1>
-          <p>{s ? '更新账本信息，未来扣款计划会同步调整。' : '从下一笔扣款开始，记录这份订阅。'}</p>
-        </div>
+      <header className="page-head form-page-head">
+        <button
+          className="form-back"
+          disabled={busy}
+          onClick={onCancel}
+          aria-label={s ? '返回订阅详情' : '返回我的订阅'}
+          title={s ? '返回订阅详情' : '返回我的订阅'}
+        >
+          <ArrowLeft size={18} aria-hidden="true" />
+        </button>
+        <h1>{s ? '编辑订阅' : '新增订阅'}</h1>
       </header>
       <form className="subscription-form panel" onSubmit={submit}>
         <fieldset disabled={busy}>
-          <h2>订阅信息</h2>
           <div className="form-grid">
             <label className="full">
               订阅名称
