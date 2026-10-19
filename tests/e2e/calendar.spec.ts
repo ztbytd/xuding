@@ -92,6 +92,10 @@ test('compact calendar filters bills and adapts to window width', async ({}, tes
     await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
     await expect(page.getByRole('heading', { name: '扣款日历', exact: true })).toBeVisible()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1220, 860))
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1220)
+    await expect
+      .poll(async () => (await details.boundingBox())!.x)
+      .toBeGreaterThan((await panel.boundingBox())!.x + (await panel.boundingBox())!.width)
     await page.screenshot({
       path: testInfo.outputPath('calendar-dark.png'),
       animations: 'disabled'

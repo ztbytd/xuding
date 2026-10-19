@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { Button, DatePicker, Input, InputNumber, Switch } from 'antd'
 import dayjs from 'dayjs'
@@ -127,6 +127,25 @@ function Status({ subscription: s }: { subscription: Subscription }) {
     </span>
   )
 }
+function SubscriptionAvatar({
+  name,
+  icon,
+  large = false
+}: {
+  name: string
+  icon?: string
+  large?: boolean
+}) {
+  return (
+    <span className={`avatar${large ? ' large' : ''}`}>
+      {icon ? (
+        <img src={icon} alt={`${name || '订阅'}图标`} />
+      ) : (
+        name.slice(0, 1) || <Layers size={20} />
+      )}
+    </span>
+  )
+}
 function BillRows({ bills, onOpen }: { bills: Bill[]; onOpen: (id: string) => void }) {
   return (
     <div>
@@ -137,7 +156,7 @@ function BillRows({ bills, onOpen }: { bills: Bill[]; onOpen: (id: string) => vo
           onClick={() => onOpen(b.subscription.id)}
           aria-label={`查看 ${b.subscription.name} 详情`}
         >
-          <span className="avatar">{b.subscription.name.slice(0, 1)}</span>
+          <SubscriptionAvatar {...b.subscription} />
           <span className="row-info">
             <strong>{b.subscription.name}</strong>
             <small>
@@ -163,6 +182,15 @@ export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [route, setRoute] = useState<Route>({ page: 'overview' })
   const [currency, setCurrency] = useState<Currency>('CNY')
+  const initializedCurrency = useRef(false)
+  const chooseCurrency = useCallback((value: Currency) => {
+    setCurrency(value)
+    try {
+      localStorage.setItem('xuding.currency', value)
+    } catch {
+      /* Storage may be unavailable. */
+    }
+  }, [])
   const [today, setToday] = useState(localDate())
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -176,9 +204,25 @@ export function App() {
 
   const reload = useCallback(async () => {
     const value = unwrap(await window.desktop.load())
+    if (!initializedCurrency.current) {
+      initializedCurrency.current = true
+      let saved: string | null = null
+      try {
+        saved = localStorage.getItem('xuding.currency')
+      } catch {
+        /* Use available subscriptions. */
+      }
+      const current = value.subscriptions.filter((s) => s.status !== 'archived')
+      const preferred = current.find((s) => s.currency === 'CNY') ?? current[0]
+      chooseCurrency(
+        currencies.includes(saved as Currency)
+          ? (saved as Currency)
+          : (preferred?.currency ?? 'CNY')
+      )
+    }
     setSnapshot(value)
     return value
-  }, [])
+  }, [chooseCurrency])
   useEffect(() => {
     void reload().catch((e) => setError(String(e.message)))
     const timer = setInterval(() => setToday(localDate()), 30_000)
@@ -227,7 +271,7 @@ export function App() {
       <SelectField
         label="统计币种"
         value={currency}
-        onChange={(value) => setCurrency(value as Currency)}
+        onChange={(value) => chooseCurrency(value as Currency)}
         options={currencies.map((c) => ({ value: c, label: currencyNames[c] }))}
       />
     </label>
@@ -235,6 +279,19 @@ export function App() {
 
   function overview() {
     const summary = totals(data, currency, today)
+    const current = data.filter((s) => s.status !== 'archived')
+    const inCurrency = current.filter((s) => s.currency === currency)
+    const paused = inCurrency.filter((s) => !s.autoRenew).length
+    const otherCurrencies = currencies.filter(
+      (c) => c !== currency && current.some((s) => s.currency === c)
+    )
+    const emptyReason = !current.length
+      ? '还没有当前订阅。'
+      : !inCurrency.length
+        ? `当前没有 ${currency} 订阅，可切换上方币种查看。`
+        : !summary.count
+          ? `当前 ${inCurrency.length} 项订阅均已关闭续费，未计入预计支出。`
+          : '当前币种下，未来 30 天没有预计扣款。'
     const trial = summary.bills.find(
       (b) =>
         b.subscription.status === 'trial' &&
@@ -246,10 +303,31 @@ export function App() {
         <header className="page-head">
           <div>
             <h1>每一笔订阅，心里有数。</h1>
-            <p>{formatDate(today)} · 把持续支出看清楚</p>
+            <p>
+              {formatDate(today)} ·{' '}
+              {current.length ? `已记录 ${current.length} 项当前订阅` : '把持续支出看清楚'}
+            </p>
           </div>
           {currencyPicker}
         </header>
+        {current.length > 0 && (
+          <div className="overview-context">
+            <span>
+              {currency} · {inCurrency.length} 项订阅
+              {paused > 0 && ` · ${paused} 项续费已关闭，不计入预计支出`}
+            </span>
+            {otherCurrencies.length > 0 && (
+              <span className="currency-shortcuts">
+                其他币种
+                {otherCurrencies.map((c) => (
+                  <button key={c} className="text-button" onClick={() => chooseCurrency(c)}>
+                    查看 {c}
+                  </button>
+                ))}
+              </span>
+            )}
+          </div>
+        )}
         <div className="stats">
           <div className="stat featured">
             <div className="stat-heading">
@@ -311,7 +389,7 @@ export function App() {
             ) : (
               <Empty>
                 {data.length ? (
-                  '当前币种下，近期没有预计扣款。'
+                  emptyReason
                 ) : (
                   <>
                     还没有订阅。
@@ -348,7 +426,9 @@ export function App() {
                 )
               )
             })}
-            {!summary.monthly && <Empty>添加订阅后，分类支出会显示在这里。</Empty>}
+            {!summary.monthly && (
+              <Empty>{summary.count ? '当前续费订阅金额为 0，暂无分类支出。' : emptyReason}</Empty>
+            )}
           </Panel>
         </div>
       </>
@@ -409,17 +489,20 @@ export function App() {
                 onClick={() => openDetail(s.id, 'list')}
                 aria-label={`查看 ${s.name} 详情`}
               >
-                <span className="avatar">{s.name.slice(0, 1)}</span>
+                <SubscriptionAvatar {...s} />
                 <span className="row-info">
-                  <strong>{s.name}</strong>
+                  <span className="row-title">
+                    <strong>{s.name}</strong>
+                    <Status subscription={s} />
+                  </span>
                   <small>
-                    {s.category} · {next ? `${formatDate(next.due)} 预计扣款` : '暂无续费计划'}
+                    {s.category}
+                    {next ? ` · ${formatDate(next.due)} 预计扣款` : ''}
                   </small>
                 </span>
-                <Status subscription={s} />
                 <span className="row-price">
                   <strong>{formatMoney(s.amountMinor, s.currency)}</strong>
-                  <small>{cycleLabel(s)}</small>
+                  <small>/ {cycleLabel(s).slice(1)}</small>
                 </span>
                 <ChevronRight size={17} className="chevron" />
               </button>
@@ -449,7 +532,7 @@ export function App() {
         </button>
         <header className="page-head">
           <div className="detail-title">
-            <span className="avatar large">{s.name.slice(0, 1)}</span>
+            <SubscriptionAvatar {...s} large />
             <div>
               <h1>{s.name}</h1>
               <p>{s.category} · 订阅详情</p>
@@ -759,7 +842,7 @@ export function App() {
           <div className="setting-row">
             <span>
               <strong>导出订阅</strong>
-              <small>导出 JSON 文件，包含订阅信息和备注，不包含修改历史。</small>
+              <small>导出 JSON 文件，包含订阅信息、图标和备注，不包含修改历史。</small>
             </span>
             <button
               className="secondary"
@@ -927,6 +1010,8 @@ export function App() {
                 void perform(async () => {
                   const item = unwrap(await window.desktop.save(input, route.id))
                   await reload()
+                  if (!selected || selected.currency !== item.currency)
+                    chooseCurrency(item.currency)
                   openDetail(item.id, route.from)
                   setNotice('订阅已保存。')
                 })
@@ -958,8 +1043,24 @@ function SubscriptionForm({
 }) {
   const [error, setError] = useState('')
   const [autoRenew, setAutoRenew] = useState(s?.autoRenew ?? true)
+  const [icon, setIcon] = useState(s?.icon)
+  const [name, setName] = useState(s?.name || '')
+  const [pickingIcon, setPickingIcon] = useState(false)
+  async function pickIcon() {
+    setPickingIcon(true)
+    setError('')
+    try {
+      const value = unwrap(await window.desktop.pickIcon())
+      if (value) setIcon(value)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '读取图标失败，请重试。')
+    } finally {
+      setPickingIcon(false)
+    }
+  }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (busy || pickingIcon) return
     const values = new FormData(event.currentTarget)
     const amountMinor = parseAmount(String(values.get('amount')))
     if (amountMinor === null) {
@@ -968,6 +1069,7 @@ function SubscriptionForm({
     }
     const raw = {
       name: values.get('name'),
+      icon,
       category: values.get('category'),
       amountMinor,
       currency: values.get('currency'),
@@ -1005,6 +1107,33 @@ function SubscriptionForm({
       </header>
       <form className="subscription-form panel" onSubmit={submit}>
         <fieldset disabled={busy}>
+          <div className="icon-editor">
+            <SubscriptionAvatar name={name} icon={icon} large />
+            <div className="icon-editor-content">
+              <div className="icon-editor-actions">
+                <Button
+                  size="small"
+                  icon={<Upload size={14} />}
+                  disabled={busy}
+                  loading={pickingIcon}
+                  onClick={() => void pickIcon()}
+                >
+                  {icon ? '更换图标' : '上传图标'}
+                </Button>
+                {icon && (
+                  <Button
+                    size="small"
+                    type="text"
+                    disabled={busy || pickingIcon}
+                    onClick={() => setIcon(undefined)}
+                  >
+                    移除图标
+                  </Button>
+                )}
+              </div>
+              <small>PNG / JPG，最大 5 MB · 图片保存在本机</small>
+            </div>
+          </div>
           <div className="form-grid">
             <label className="full">
               订阅名称
@@ -1014,7 +1143,8 @@ function SubscriptionForm({
                 required
                 maxLength={80}
                 placeholder="例如：音乐会员"
-                defaultValue={s?.name || ''}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
                 autoFocus
               />
             </label>
@@ -1158,13 +1288,13 @@ function SubscriptionForm({
           </div>
           <label className="check-row">
             <Switch
-              aria-label="自动续费已开启"
+              aria-label="自动续费"
               checked={autoRenew}
               onChange={setAutoRenew}
               disabled={busy}
             />
             {autoRenew && <input name="autoRenew" type="hidden" value="on" />}
-            自动续费已开启
+            {autoRenew ? '自动续费已开启' : '自动续费已关闭'}
           </label>
           <p className="footnote">
             试用订阅请将基准日设为试用结束后的首次扣款日。修改续费开关只影响本地账本，实际取消需到服务商处操作。
@@ -1178,7 +1308,7 @@ function SubscriptionForm({
             <Button disabled={busy} onClick={onCancel}>
               {s ? '取消编辑' : '取消'}
             </Button>
-            <Button htmlType="submit" type="primary" loading={busy}>
+            <Button htmlType="submit" type="primary" loading={busy} disabled={pickingIcon}>
               {busy ? '正在保存…' : s ? '保存修改' : '添加订阅'}
             </Button>
           </div>

@@ -22,6 +22,14 @@ export const dateSchema = z.string().refine(isDate, '请输入有效日期（197
 export const subscriptionInputSchema = z
   .object({
     name: z.string().trim().min(1, '请输入订阅名称').max(80),
+    icon: z
+      .string()
+      .max(100_000)
+      .regex(
+        /^data:image\/png;base64,iVBORw0KGgo[A-Za-z0-9+/]*={0,2}$/,
+        '图标须为有效的本地 PNG 图片'
+      )
+      .optional(),
     category: z.enum(categories),
     amountMinor: z.number().int().min(0).max(999999999),
     currency: z.enum(currencies),
@@ -83,4 +91,5 @@ export interface DesktopApi {
   exportBackup(): Promise<Result<boolean>>
   importBackup(): Promise<Result<number | null>>
   openWebsite(url: string): Promise<Result<void>>
+  pickIcon(): Promise<Result<string | null>>
 }

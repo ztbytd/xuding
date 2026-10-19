@@ -54,4 +54,21 @@ describe('local storage', () => {
     repo.saveSettings({ notificationsEnabled: true })
     expect(repo.settings().notificationsEnabled).toBe(true)
   })
+  it('keeps embedded icons in edits, backups, and archives while accepting older records', () => {
+    const icon =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=='
+    const old = repo.save(input)
+    expect(old.icon).toBeUndefined()
+    repo.save({ ...input, icon }, old.id)
+    const backup = repo.export()
+    repo.save(input, old.id)
+    expect(repo.list()[0].icon).toBeUndefined()
+    repo.import(backup)
+    expect(repo.list()[0].icon).toBe(icon)
+    repo.archive(old.id)
+    expect(repo.list()[0].icon).toBe(icon)
+    expect(() => repo.save({ ...input, icon: 'https://example.com/icon.png' })).toThrow()
+    expect(() => repo.save({ ...input, icon: 'data:image/svg+xml;base64,PHN2Zz4=' })).toThrow()
+    expect(() => repo.save({ ...input, icon: icon + 'A'.repeat(100_000) })).toThrow()
+  })
 })

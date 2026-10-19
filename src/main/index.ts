@@ -1,4 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  Notification,
+  shell
+} from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { mkdirSync } from 'node:fs'
@@ -50,6 +59,26 @@ function handle(channel: string, handler: (...args: any[]) => unknown): void {
 }
 
 function registerApi(): void {
+  handle(channels.pickIcon, async () => {
+    if (!window) return null
+    const picked = await dialog.showOpenDialog(window, {
+      title: '选择订阅图标',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg'] }]
+    })
+    if (picked.canceled || !picked.filePaths[0]) return null
+    const file = picked.filePaths[0]
+    if ((await stat(file)).size > 5 * 1024 * 1024)
+      throw new Error('图片不能超过 5 MB，请选择较小的图片。')
+    const image = nativeImage.createFromBuffer(await readFile(file))
+    if (image.isEmpty()) throw new Error('无法读取这张图片，请选择 PNG 或 JPG 图片。')
+    const { width, height } = image.getSize()
+    const normalized = image.resize({
+      ...(width >= height ? { width: Math.min(width, 128) } : { height: Math.min(height, 128) }),
+      quality: 'best'
+    })
+    return 'data:image/png;base64,' + normalized.toPNG().toString('base64')
+  })
   handle(channels.load, () => ({
     subscriptions: repository.list(),
     settings: repository.settings(),
@@ -92,8 +121,8 @@ function registerApi(): void {
       filters: [{ name: 'JSON 备份', extensions: ['json'] }]
     })
     if (picked.canceled || !picked.filePaths[0]) return null
-    if ((await stat(picked.filePaths[0])).size > 5 * 1024 * 1024)
-      throw new Error('备份文件不能超过 5 MB。')
+    if ((await stat(picked.filePaths[0])).size > 50 * 1024 * 1024)
+      throw new Error('备份文件不能超过 50 MB。')
     const backup = backupSchema.parse(JSON.parse(await readFile(picked.filePaths[0], 'utf8')))
     const confirmation = await dialog.showMessageBox(window, {
       type: 'question',

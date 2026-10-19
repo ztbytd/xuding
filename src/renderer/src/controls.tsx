@@ -78,33 +78,37 @@ export function SelectField({
   disabled?: boolean
 }) {
   const id = useId()
+  const reducedMotion = useMedia('(prefers-reduced-motion: reduce)')
   const [open, setOpen] = useState(false)
   const [localValue, setLocalValue] = useState(defaultValue ?? options[0]?.value)
   const selected = value ?? localValue
   return (
     <>
-      <Select<string>
-        id={id}
-        className="app-select"
-        aria-label={label}
-        value={selected}
-        options={options}
-        disabled={disabled}
-        virtual={false}
-        open={open}
-        onOpenChange={setOpen}
-        suffixIcon={
-          <ChevronDown
-            size={16}
-            aria-hidden="true"
-            className={`select-chevron${open ? ' is-open' : ''}`}
-          />
-        }
-        onChange={(next) => {
-          setLocalValue(next)
-          onChange?.(next)
-        }}
-      />
+      {/* Scope motion changes to this controlled field so app routes and form drafts stay mounted. */}
+      <ConfigProvider theme={{ token: { motion: !reducedMotion } }}>
+        <Select<string>
+          id={id}
+          className="app-select"
+          aria-label={label}
+          value={selected}
+          options={options}
+          disabled={disabled}
+          virtual={false}
+          open={open}
+          onOpenChange={setOpen}
+          suffixIcon={
+            <ChevronDown
+              size={16}
+              aria-hidden="true"
+              className={`select-chevron${open ? ' is-open' : ''}`}
+            />
+          }
+          onChange={(next) => {
+            setLocalValue(next)
+            onChange?.(next)
+          }}
+        />
+      </ConfigProvider>
       {name && <input type="hidden" name={name} value={selected} disabled={disabled} />}
     </>
   )

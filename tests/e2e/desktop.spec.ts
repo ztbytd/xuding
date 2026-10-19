@@ -57,7 +57,7 @@ test('desktop CRUD, details, backups, and restart persistence', async () => {
     await page.getByRole('option', { name: '学习成长', exact: true }).click()
     await page.getByRole('combobox', { name: '提醒时间', exact: true }).click()
     await page.getByRole('option', { name: '提前 7 天', exact: true }).click()
-    await page.getByRole('switch', { name: '自动续费已开启' }).click()
+    await page.getByRole('switch', { name: '自动续费', exact: true }).click()
     await expect(page.locator('input[type="number"], input[type="date"], select')).toHaveCount(0)
     const anchorDate = page.getByRole('textbox', { name: '计费基准日 / 首次扣款日' })
     await anchorDate.fill('2026-02-30')

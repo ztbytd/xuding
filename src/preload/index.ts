@@ -4,6 +4,7 @@ import type { DesktopApi } from '../shared/model'
 
 const api: DesktopApi = {
   load: () => ipcRenderer.invoke(channels.load),
+  pickIcon: () => ipcRenderer.invoke(channels.pickIcon),
   save: (input, id) => ipcRenderer.invoke(channels.save, input, id),
   archive: (id) => ipcRenderer.invoke(channels.archive, id),
   settings: (input) => ipcRenderer.invoke(channels.settings, input),

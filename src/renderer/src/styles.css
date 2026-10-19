@@ -470,6 +470,67 @@ small {
   border-radius: 14px;
   font-size: 20px;
 }
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+}
+.overview-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: -4px 0 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.currency-shortcuts {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.row-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.subscription-list .row-price {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-left: 12px;
+}
+.subscription-list .row-price strong {
+  font-size: 16px;
+  font-weight: 600;
+}
+.subscription-list .row-price small {
+  font-size: 12px;
+  margin: 0;
+}
+.subscription-list .row-title .badge {
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 400;
+}
+.icon-editor {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.icon-editor-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+.icon-editor-content small {
+  color: var(--muted);
+  font-size: 11px;
+}
 .row-info {
   flex: 1;
   min-width: 0;
@@ -974,9 +1035,6 @@ small {
   .overview-columns .bar-row {
     margin: 15px 0;
   }
-  .subscription-list .badge {
-    display: none;
-  }
 }
 @media (max-width: 700px) {
   .app-shell {
@@ -1127,7 +1185,8 @@ small {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    /* Nonzero global transitions also animate popup positioning during measurement. */
+    transition-duration: 0s !important;
     scroll-behavior: auto !important;
   }
 }
