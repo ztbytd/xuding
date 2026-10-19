@@ -95,7 +95,7 @@ export class BackupService {
       return this.status()
     })
   }
-  private async write(kind: BackupEntry['kind']): Promise<void> {
+  private async write(kind: BackupEntry['kind']): Promise<string> {
     const revision = this.repo.revision()
     const now = this.now(),
       day = localDate(now)
@@ -127,6 +127,7 @@ export class BackupService {
       }
       this.persist()
       await this.cleanup()
+      return id
     } catch (error) {
       this.state.lastError =
         error instanceof Error ? error.message : '备份失败，请检查目录权限与剩余空间。'
@@ -217,9 +218,11 @@ export class BackupService {
     })
     return {
       token,
-      bills: backup.version === 2 ? backup.bills.length : 0,
-      prices: backup.version === 2 ? backup.prices.length : 0,
+      bills: backup.version >= 2 ? (backup as Exclude<Backup, { version: 1 }>).bills.length : 0,
+      prices: backup.version >= 2 ? (backup as Exclude<Backup, { version: 1 }>).prices.length : 0,
       legacy: backup.version === 1,
+      fullRestoreSupported: backup.version === 3,
+      budgets: backup.version === 3 ? backup.budgets.length : 0,
       source,
       exportedAt: backup.exportedAt,
       count: backup.subscriptions.length,
@@ -231,7 +234,10 @@ export class BackupService {
   async preview(id: string): Promise<RestorePreview> {
     return this.prepareFile(await this.safePath(id))
   }
-  restore(token: string): Promise<number> {
+  beforeImport(): Promise<string> {
+    return this.serialize(() => this.write('before-restore'))
+  }
+  restore(token: string, mode: 'merge' | 'replace' = 'merge'): Promise<number> {
     return this.serialize(async () => {
       const preview = this.previews.get(token)
       if (!preview || preview.expires < Date.now())
@@ -241,7 +247,7 @@ export class BackupService {
       await this.write('before-restore')
       if (preview.revision !== this.repo.revision())
         throw new Error('账本已发生变化，请重新预览后恢复。')
-      const count = this.repo.import(preview.backup)
+      const count = this.repo.import(preview.backup, mode === 'replace')
       this.previews.delete(token)
       this.changed()
       return count

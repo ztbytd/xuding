@@ -25,6 +25,7 @@ export function ControlsProvider({ children }: { children: ReactNode }) {
   return (
     <ConfigProvider
       locale={zhCN}
+      button={{ autoInsertSpace: false }}
       theme={{
         algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {

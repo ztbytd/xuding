@@ -169,6 +169,12 @@ export class LedgerStore {
         const start =
           cursor.through < cursor.startedOn ? cursor.startedOn : addDays(cursor.through, 1)
         for (const bill of occurrences(s, start, today, 2000, prices)) {
+          if (
+            this.db
+              .prepare('SELECT id FROM bills WHERE subscription_id=? AND due=?')
+              .get(s.id, bill.due)
+          )
+            continue
           const item = billRecordSchema.parse({
             id: randomUUID(),
             subscriptionId: s.id,
@@ -247,6 +253,14 @@ export class LedgerStore {
     // Editing an existing payment preserves its original conversion snapshot.
     const item = billRecordSchema.parse({
       ...previous,
+      conversion:
+        input.status !== 'paid'
+          ? undefined
+          : previous.conversion?.source === 'manual' &&
+              (input.payment?.amountMinor !== previous.payment?.amountMinor ||
+                input.payment?.currency !== previous.payment?.currency)
+            ? { source: 'confirmation' }
+            : previous.conversion,
       status: input.status,
       payment: input.payment ?? null,
       rates:
@@ -268,6 +282,29 @@ export class LedgerStore {
       )
     })
     return item
+  }
+  importPrice(s: Subscription, effectiveOn: string) {
+    this.writePrice(
+      priceSchema.parse({
+        id: randomUUID(),
+        subscriptionId: s.id,
+        amountMinor: s.amountMinor,
+        currency: s.currency,
+        effectiveOn,
+        createdAt: this.now().toISOString()
+      })
+    )
+    this.log(
+      s.id,
+      `CSV 更新价格 ${s.currency} ${(s.amountMinor / 100).toFixed(2)}，${effectiveOn} 生效`
+    )
+  }
+  importBill(item: BillRecord) {
+    const old = this.bills().find((b) => b.id === item.id)
+    if (old && old.subscriptionId !== item.subscriptionId)
+      throw new Error('账单 ID 与其他订阅冲突。')
+    this.writeBill(billRecordSchema.parse(item))
+    this.log(item.subscriptionId, 'CSV 导入账单', item.id)
   }
   import(
     rows: { bills: BillRecord[]; prices: Price[]; changes: LedgerChange[]; tracking: Tracking[] },

@@ -14,6 +14,9 @@ import type {
   PriceInput,
   LedgerChange
 } from './ledger-model'
+import { budgetSchema, budgetReminderSchema, importBatchSchema } from './analytics-model'
+import type { Budget, BudgetInput, ImportBatch } from './analytics-model'
+import type { CsvFile, CsvOptions, CsvPreview, CsvExport } from './csv-model'
 import { categories } from './primitives'
 export { categories } from './primitives'
 export const subscriptionInputSchema = z
@@ -73,6 +76,7 @@ export type Bill = {
 export const settingsPatchSchema = z
   .object({
     notificationsEnabled: z.boolean().optional(),
+    budgetNotificationsEnabled: z.boolean().optional(),
     launchAtLogin: z.boolean().optional(),
     startInTray: z.boolean().optional(),
     closeBehavior: z.enum(['ask', 'tray', 'quit']).optional(),
@@ -83,6 +87,7 @@ export const settingsPatchSchema = z
 export const settingsSchema = z
   .object({
     notificationsEnabled: z.boolean().default(false),
+    budgetNotificationsEnabled: z.boolean().default(false),
     launchAtLogin: z.boolean().default(false),
     startInTray: z.boolean().default(false),
     closeBehavior: z.enum(['ask', 'tray', 'quit']).default('ask'),
@@ -107,9 +112,25 @@ const currentBackupSchema = backupBase
     tracking: z.array(trackingSchema).max(10000)
   })
   .strict()
+const nextBackupSchema = currentBackupSchema
+  .extend({
+    version: z.literal(3),
+    budgets: z.array(budgetSchema).max(2000),
+    budgetReminders: z.array(budgetReminderSchema).max(100000),
+    importBatches: z.array(importBatchSchema).max(10000)
+  })
+  .strict()
 export const backupSchema = z
-  .discriminatedUnion('version', [legacyBackupSchema, currentBackupSchema])
+  .discriminatedUnion('version', [legacyBackupSchema, currentBackupSchema, nextBackupSchema])
   .superRefine((value, ctx) => {
+    if (value.version === 3) {
+      if (new Set(value.budgets.map((b) => b.month)).size !== value.budgets.length)
+        ctx.addIssue({ code: 'custom', message: '预算月份重复' })
+      if (new Set(value.importBatches.map((b) => b.id)).size !== value.importBatches.length)
+        ctx.addIssue({ code: 'custom', message: '导入批次重复' })
+      if (new Set(value.budgetReminders.map((b) => b.key)).size !== value.budgetReminders.length)
+        ctx.addIssue({ code: 'custom', message: '预算提醒重复' })
+    }
     const ids = new Set(value.subscriptions.map((s) => s.id))
     const fail = (message: string) => ctx.addIssue({ code: 'custom', message })
     if (ids.size !== value.subscriptions.length) fail('备份中包含重复 ID')
@@ -171,12 +192,16 @@ export type RestorePreview = {
   bills: number
   prices: number
   legacy: boolean
+  fullRestoreSupported: boolean
+  budgets: number
 }
 export type DesktopAction = { sequence: number } & (
-  { page: 'new' } | { page: 'detail'; id: string }
+  { page: 'new' } | { page: 'analysis' } | { page: 'detail'; id: string }
 )
 export type Snapshot = {
   subscriptions: Subscription[]
+  budgets: Budget[]
+  importBatches: ImportBatch[]
   bills: BillRecord[]
   prices: Price[]
   changes: LedgerChange[]
@@ -188,6 +213,12 @@ export type Snapshot = {
 }
 
 export interface DesktopApi {
+  saveBudget(input: BudgetInput): Promise<Result<Budget>>
+  csvChoose(): Promise<Result<CsvFile | null>>
+  csvDecode(token: string, encoding: 'utf-8' | 'gb18030'): Promise<Result<CsvFile>>
+  csvPreview(options: CsvOptions): Promise<Result<CsvPreview>>
+  csvCommit(token: string): Promise<Result<ImportBatch>>
+  csvExport(input: CsvExport): Promise<Result<boolean>>
   load(): Promise<Result<Snapshot>>
   save(input: SubscriptionInput, id?: string): Promise<Result<Subscription>>
   updateBill(input: BillUpdate): Promise<Result<BillRecord>>
@@ -198,7 +229,7 @@ export interface DesktopApi {
   exportBackup(): Promise<Result<boolean>>
   previewImport(): Promise<Result<RestorePreview | null>>
   previewBackup(id: string): Promise<Result<RestorePreview>>
-  restoreBackup(token: string): Promise<Result<number>>
+  restoreBackup(token: string, mode?: 'merge' | 'replace'): Promise<Result<number>>
   backupStatus(): Promise<Result<BackupStatus>>
   backupNow(): Promise<Result<BackupStatus>>
   backupHistory(): Promise<Result<BackupEntry[]>>

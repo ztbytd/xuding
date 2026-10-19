@@ -18,6 +18,11 @@ import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import { SubscriptionRepository } from './database'
 import { ExchangeService } from './exchange'
+import { CsvService } from './csv'
+import { csvExportSchema, csvOptionsSchema } from '../shared/csv-model'
+import { exportCsv } from '../shared/csv'
+import { budgetReminderCandidates } from '../shared/analytics'
+import { budgetInputSchema } from '../shared/analytics-model'
 import { BackupService } from './backups'
 import { DesktopLifecycle } from './desktop'
 import { settingsPatchSchema, settingsSchema, subscriptionInputSchema } from '../shared/model'
@@ -37,6 +42,7 @@ let window: BrowserWindow | null = null
 let repository: SubscriptionRepository
 let exchange: ExchangeService
 let backups: BackupService
+let csv: CsvService
 let desktop: DesktopLifecycle
 let rendererReady = false
 let pendingAction: DesktopAction | null = null
@@ -120,8 +126,12 @@ function registerApi(): void {
     backups.changed()
   })
   handle(channels.load, () => {
-    if (repository.ledger.sync()) backups.changed()
+    const billsChanged = repository.ledger.sync(),
+      budgetsChanged = repository.finance.ensureMonths()
+    if (billsChanged || budgetsChanged) backups.changed()
     return {
+      budgets: repository.finance.budgets(),
+      importBatches: repository.finance.batches(),
       bills: repository.ledger.bills(),
       prices: repository.ledger.prices(),
       changes: repository.ledger.changes(),
@@ -155,11 +165,58 @@ function registerApi(): void {
     backups.changed()
     return saved
   })
+  handle(channels.saveBudget, (input) => {
+    const item = repository.finance.save(budgetInputSchema.parse(input))
+    backups.changed()
+    return item
+  })
+  handle(channels.csvChoose, async () => {
+    if (!window) return null
+    const picked = await dialog.showOpenDialog(window, {
+      title: '选择 CSV 文件',
+      properties: ['openFile'],
+      filters: [{ name: 'CSV 表格', extensions: ['csv', 'tsv'] }]
+    })
+    return picked.canceled || !picked.filePaths[0] ? null : csv.choose(picked.filePaths[0])
+  })
+  handle(channels.csvDecode, (token, encoding) =>
+    csv.decode(z.string().uuid().parse(token), z.enum(['utf-8', 'gb18030']).parse(encoding))
+  )
+  handle(channels.csvPreview, async (raw) => {
+    const options = csvOptionsSchema.parse(raw)
+    repository.ledger.sync()
+    repository.finance.ensureMonths()
+    const rates =
+      options.conversion === 'current' ? (await exchange.get()).table : repository.exchangeRates()
+    return csv.preview(options, rates)
+  })
+  handle(channels.csvCommit, (token) => csv.commit(z.string().uuid().parse(token)))
+  handle(channels.csvExport, async (raw) => {
+    const input = csvExportSchema.parse(raw)
+    if (!window) return false
+    const result = await dialog.showSaveDialog(window, {
+      title: input.template ? '保存 CSV 模板' : '导出 CSV',
+      defaultPath: `xuding-${input.kind}-${input.template ? 'template' : localDate()}.csv`,
+      filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
+    })
+    if (result.canceled || !result.filePath) return false
+    await writeFile(
+      result.filePath,
+      exportCsv(input, repository.list(), repository.ledger.bills()),
+      { encoding: 'utf8', mode: 0o600 }
+    )
+    return true
+  })
   handle(channels.backupStatus, () => backups.status())
   handle(channels.backupNow, () => backups.nowBackup())
   handle(channels.backupHistory, () => backups.history())
   handle(channels.previewBackup, (id) => backups.preview(z.string().max(120).parse(id)))
-  handle(channels.restoreBackup, (token) => backups.restore(z.string().uuid().parse(token)))
+  handle(channels.restoreBackup, (token, mode) =>
+    backups.restore(
+      z.string().uuid().parse(token),
+      z.enum(['merge', 'replace']).optional().parse(mode)
+    )
+  )
   handle(channels.chooseBackupDirectory, async () => {
     if (!window) return backups.status()
     const picked = await dialog.showOpenDialog(window, {
@@ -203,27 +260,52 @@ function registerApi(): void {
   })
 }
 function checkReminders(): void {
-  if (repository.ledger.sync()) backups.changed()
-  if (!repository.settings().notificationsEnabled || !Notification.isSupported()) return
-  for (const candidate of reminderCandidates(repository.list(), localDate())) {
-    const key = candidate.key
-    if (repository.hasReminder(key) || remindersInFlight.has(key)) continue
-    remindersInFlight.add(key)
-    const notification = new Notification({
-      title: candidate.title,
-      body: candidate.body
-    })
-    notification.on('click', () => showWindow({ page: 'detail', id: candidate.id }))
+  const billsChanged = repository.ledger.sync(),
+    budgetsChanged = repository.finance.ensureMonths()
+  if (billsChanged || budgetsChanged) backups.changed()
+  if (!Notification.isSupported()) return
+  const settings = repository.settings(),
+    today = localDate()
+  const candidates = [
+    ...(settings.notificationsEnabled
+      ? reminderCandidates(repository.list(), today).map((c) => ({
+          ...c,
+          key: 'subscription:' + c.key,
+          sent: () => repository.hasReminder(c.key),
+          mark: () => repository.markReminder(c.key),
+          open: () => showWindow({ page: 'detail', id: c.id })
+        }))
+      : []),
+    ...(settings.budgetNotificationsEnabled
+      ? budgetReminderCandidates(
+          repository.finance.budgets().find((b) => b.month === today.slice(0, 7)),
+          repository.ledger.bills()
+        ).map((c) => ({
+          ...c,
+          key: 'budget:' + c.key,
+          sent: () => repository.finance.hasReminder(c.key),
+          mark: () => c.keys.forEach((key) => repository.finance.markReminder(key)),
+          open: () => showWindow({ page: 'analysis' })
+        }))
+      : [])
+  ]
+  for (const c of candidates) {
+    if (c.sent() || remindersInFlight.has(c.key)) continue
+    remindersInFlight.add(c.key)
+    const notification = new Notification({ title: c.title, body: c.body })
+    notification.on('click', c.open)
     notification.on('show', () => {
-      repository.markReminder(key)
-      remindersInFlight.delete(key)
+      c.mark()
+      remindersInFlight.delete(c.key)
     })
-    notification.on('failed', () => remindersInFlight.delete(key))
-    setTimeout(() => remindersInFlight.delete(key), 30_000).unref()
+    notification.on('failed', () => remindersInFlight.delete(c.key))
+    setTimeout(() => remindersInFlight.delete(c.key), 30_000).unref()
     notification.show()
   }
 }
-function showWindow(action?: { page: 'new' } | { page: 'detail'; id: string }): void {
+function showWindow(
+  action?: { page: 'new' } | { page: 'analysis' } | { page: 'detail'; id: string }
+): void {
   if (!window) createWindow()
   if (window?.isMinimized()) window.restore()
   window?.show()
@@ -290,6 +372,7 @@ else {
       await mkdir(app.getPath('userData'), { recursive: true })
       repository = new SubscriptionRepository(join(app.getPath('userData'), 'xuding.db'))
       backups = new BackupService(repository, join(app.getPath('userData'), 'backups'))
+      csv = new CsvService(repository, backups)
       exchange = new ExchangeService(repository, (input, init) => net.fetch(input, init))
       desktop = new DesktopLifecycle(repository, backups, (add) =>
         showWindow(add ? { page: 'new' } : undefined)

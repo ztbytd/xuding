@@ -4,6 +4,7 @@ import { Button, DatePicker, Input, InputNumber, Switch } from 'antd'
 import dayjs from 'dayjs'
 import {
   Archive,
+  ChartColumn,
   ArrowLeft,
   ArrowRight,
   Bell,
@@ -50,6 +51,9 @@ import { useSidebar } from './useSidebar'
 import { HelpTip, SelectField } from './controls'
 import { convertMinor } from '../../shared/exchange'
 import type { ExchangeRates } from '../../shared/exchange'
+import { AnalyticsPage, BudgetEditor, BudgetStrip } from './Analytics'
+import { CsvImportWizard, CsvExportDialog } from './CsvTransfer'
+import type { ExportContext } from './CsvTransfer'
 import { SettingsPage } from './SettingsPage'
 import { BillEditor, PriceEditor, RecordRows, LedgerHistory, SpendingTrend } from './Ledger'
 import type { BillTarget } from './Ledger'
@@ -57,7 +61,7 @@ import { actualTotals, billStatus, calendarBills } from '../../shared/ledger'
 import type { BillRecord } from '../../shared/ledger-model'
 import { accessLabel, attentionItems } from '../../shared/attention'
 
-type MainPage = 'overview' | 'list' | 'calendar' | 'settings'
+type MainPage = 'overview' | 'list' | 'calendar' | 'analysis' | 'settings'
 type Route =
   | { [P in MainPage]: { page: P } }[MainPage]
   | { page: 'detail'; id: string; from: MainPage }
@@ -66,12 +70,14 @@ const pageNames = {
   overview: '总览',
   list: '我的订阅',
   calendar: '扣款日历',
+  analysis: '支出分析',
   settings: '设置与备份'
 }
 const navItems = [
   { page: 'overview', icon: LayoutDashboard },
   { page: 'list', icon: Layers },
   { page: 'calendar', icon: CalendarDays },
+  { page: 'analysis', icon: ChartColumn },
   { page: 'settings', icon: SettingsIcon }
 ] as const
 const currencyNames: Record<Currency, string> = {
@@ -239,6 +245,10 @@ export function App() {
   const [priceTarget, setPriceTarget] = useState<Subscription | null>(null)
   const [allPending, setAllPending] = useState(false)
   const [categoryMode, setCategoryMode] = useState('forecast')
+  const [analysisMonth, setAnalysisMonth] = useState(today.slice(0, 7))
+  const [budgetMonth, setBudgetMonth] = useState<string | null>(null)
+  const [csvImportOpen, setCsvImportOpen] = useState(false)
+  const [csvExport, setCsvExport] = useState<ExportContext | null>(null)
   const navigationSequence = useRef(0)
 
   const reload = useCallback(async () => {
@@ -281,7 +291,9 @@ export function App() {
           setRoute(
             action.page === 'new'
               ? { page: 'edit', from: 'list' }
-              : { page: 'detail', id: action.id, from: 'overview' }
+              : action.page === 'analysis'
+                ? { page: 'analysis' }
+                : { page: 'detail', id: action.id, from: 'overview' }
           )
         })
         .catch((error) => setError(String(error.message)))
@@ -357,8 +369,14 @@ export function App() {
     }
   }, [])
   useEffect(() => {
-    if (needsExchange && route.page === 'overview') void refreshRates()
-  }, [needsExchange, route.page, today, refreshRates])
+    if (
+      (needsExchange ||
+        route.page === 'analysis' ||
+        snapshot?.budgets.some((b) => b.enabled && b.currency !== currency)) &&
+      (route.page === 'overview' || route.page === 'analysis')
+    )
+      void refreshRates()
+  }, [needsExchange, route.page, today, refreshRates, snapshot?.budgets.length])
   const selected = 'id' in route ? data.find((s) => s.id === route.id) : undefined
   const currentPage = route.page === 'detail' || route.page === 'edit' ? 'list' : route.page
   const openDetail = (id: string, from: MainPage) => setRoute({ page: 'detail', id, from })
@@ -491,6 +509,14 @@ export function App() {
             <strong>{money(summary.upcoming)}</strong>
           </div>
         </div>
+        <BudgetStrip
+          snapshot={snapshot!}
+          today={today}
+          onOpen={() => {
+            setAnalysisMonth(today.slice(0, 7))
+            setRoute({ page: 'analysis' })
+          }}
+        />
         {actual.missing > 0 && (
           <div className="exchange-notice" role="status">
             本月有 {actual.missing}{' '}
@@ -658,7 +684,17 @@ export function App() {
               {data.filter((s) => s.status !== 'archived').length} 项当前订阅 · 记录每一份持续投入
             </p>
           </div>
-          {addButton}
+          <div className="page-actions">
+            <Button onClick={() => setCsvImportOpen(true)}>导入 CSV</Button>
+            <Button
+              onClick={() =>
+                setCsvExport({ kind: 'subscriptions', subscriptionIds: visible.map((s) => s.id) })
+              }
+            >
+              导出
+            </Button>
+            {addButton}
+          </div>
         </header>
         <div className="list-tools">
           <Input
@@ -689,8 +725,7 @@ export function App() {
         <div className="subscription-list">
           {visible.map((s) => {
             const start = records.some(
-              (b) =>
-                b.subscriptionId === s.id && b.due === today && !b.manual && b.status !== 'pending'
+              (b) => b.subscriptionId === s.id && b.due === today && b.status !== 'pending'
             )
               ? addDays(today, 1)
               : today
@@ -740,9 +775,7 @@ export function App() {
   function detail(s: Subscription, from: MainPage) {
     const bills = nextBills(
         s,
-        records.some(
-          (b) => b.subscriptionId === s.id && b.due === today && !b.manual && b.status !== 'pending'
-        )
+        records.some((b) => b.subscriptionId === s.id && b.due === today && b.status !== 'pending')
           ? addDays(today, 1)
           : today,
         3,
@@ -1095,7 +1128,7 @@ export function App() {
     if (subscription) setBillTarget({ subscription, bill })
   }
   function updateBillStatus(bill: BillRecord, status: 'pending' | 'skipped') {
-    void perform(async () => {
+    return perform(async () => {
       unwrap(
         await window.desktop.updateBill({ id: bill.id, expectedUpdatedAt: bill.updatedAt, status })
       )
@@ -1104,7 +1137,15 @@ export function App() {
     })
   }
   function settings() {
-    return <SettingsPage snapshot={snapshot!} onReload={reload} onNotice={setNotice} />
+    return (
+      <SettingsPage
+        snapshot={snapshot!}
+        onReload={reload}
+        onNotice={setNotice}
+        onCsvImport={() => setCsvImportOpen(true)}
+        onCsvExport={() => setCsvExport({})}
+      />
+    )
   }
 
   return (
@@ -1193,6 +1234,21 @@ export function App() {
             list()
           ) : route.page === 'calendar' ? (
             calendar()
+          ) : route.page === 'analysis' ? (
+            <AnalyticsPage
+              snapshot={snapshot}
+              month={analysisMonth}
+              onMonth={setAnalysisMonth}
+              currency={currency}
+              onCurrency={chooseCurrency}
+              onOpen={(id) => openDetail(id, 'analysis')}
+              onEdit={editBill}
+              onStatus={updateBillStatus}
+              onImport={() => setCsvImportOpen(true)}
+              onExport={(subscriptionIds, billIds) => setCsvExport({ subscriptionIds, billIds })}
+              onBudget={setBudgetMonth}
+              today={today}
+            />
           ) : route.page === 'settings' ? (
             settings()
           ) : route.page === 'detail' ? (
@@ -1220,6 +1276,33 @@ export function App() {
                   setNotice('订阅已保存。')
                 })
               }
+            />
+          )}
+          {budgetMonth && snapshot && (
+            <BudgetEditor
+              key={budgetMonth}
+              month={budgetMonth}
+              budget={snapshot.budgets.find((b) => b.month === budgetMonth)}
+              onClose={() => setBudgetMonth(null)}
+              onSaved={async () => {
+                await reload()
+                setNotice('预算已保存。')
+              }}
+            />
+          )}
+          {csvImportOpen && snapshot && (
+            <CsvImportWizard
+              snapshot={snapshot}
+              onClose={() => setCsvImportOpen(false)}
+              onImported={reload}
+            />
+          )}
+          {csvExport && (
+            <CsvExportDialog
+              context={csvExport}
+              currency={currency}
+              onClose={() => setCsvExport(null)}
+              onNotice={setNotice}
             />
           )}
           {billTarget && (

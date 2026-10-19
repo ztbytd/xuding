@@ -100,9 +100,7 @@ export function totals(
     selected.map((s) => convertMinor(monthlyMinor(s), s.currency, currency, rates))
   )
   const bills = forecast(selected, today, addDays(today, 29), undefined, prices).flatMap((b) => {
-    const record = records.find(
-      (r) => r.subscriptionId === b.subscription.id && r.due === b.due && !r.manual
-    )
+    const record = records.find((r) => r.subscriptionId === b.subscription.id && r.due === b.due)
     return record
       ? record.status === 'pending'
         ? [{ ...b, amountMinor: record.amountMinor, currency: record.currency }]

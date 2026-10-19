@@ -215,7 +215,7 @@ describe('billing ledger and actual spending', () => {
     const s = repo.save(input)
     pay(repo.ledger.bills()[0].id)
     const backup = repo.export()
-    if (backup.version !== 2) throw new Error('Expected version 2')
+    if (backup.version !== 3) throw new Error('Expected version 3')
     const original = repo.ledger.bills()
     repo.save({ ...input, amountMinor: 9000 }, s.id)
     repo.import(backup)
@@ -242,7 +242,7 @@ describe('billing ledger and actual spending', () => {
     const a = repo.save(input),
       b = repo.save({ ...input, name: '另一项' })
     const source = repo.export()
-    if (source.version !== 2) throw new Error('Expected version 2')
+    if (source.version !== 3) throw new Error('Expected version 3')
     const billA = source.bills.find((r) => r.subscriptionId === a.id)!,
       billB = source.bills.find((r) => r.subscriptionId === b.id)!
     const partial = {

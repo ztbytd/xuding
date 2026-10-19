@@ -5,12 +5,18 @@ import { forecast } from './billing'
 import { convertMinor } from './exchange'
 
 export const billStatus = { pending: '待确认', paid: '已支付', skipped: '已跳过' } as const
+export function paymentMinor(b: BillRecord, currency: Currency): number | null {
+  if (!b.payment) return null
+  if (b.payment.currency === currency || b.payment.amountMinor === 0) return b.payment.amountMinor
+  if (b.conversion?.source === 'manual')
+    return b.conversion.currency === currency ? b.conversion.amountMinor : null
+  return convertMinor(b.payment.amountMinor, b.payment.currency, currency, b.rates)
+}
 export function actualTotals(bills: BillRecord[], currency: Currency, start: string, end: string) {
   const paid = bills.filter(
     (b) => b.status === 'paid' && b.payment && b.payment.paidOn >= start && b.payment.paidOn <= end
   )
-  const amount = (b: BillRecord) =>
-    convertMinor(b.payment!.amountMinor, b.payment!.currency, currency, b.rates)
+  const amount = (b: BillRecord) => paymentMinor(b, currency)
   const sum = (items: BillRecord[]) => {
     const values = items.map(amount)
     return values.some((v) => v === null)
@@ -19,6 +25,7 @@ export function actualTotals(bills: BillRecord[], currency: Currency, start: str
   }
   return {
     total: sum(paid),
+    knownTotal: Math.round(paid.map(amount).reduce<number>((n, v) => n + (v ?? 0), 0)),
     count: paid.length,
     missing: paid.filter((b) => amount(b) === null).length,
     categories: categories.map((category) => ({
@@ -44,8 +51,7 @@ export function calendarBills(
   currency: Currency
 ): Bill[] {
   const projected = forecast(subscriptions, start, end, undefined, prices).filter(
-    (b) =>
-      !records.some((r) => r.subscriptionId === b.subscription.id && r.due === b.due && !r.manual)
+    (b) => !records.some((r) => r.subscriptionId === b.subscription.id && r.due === b.due)
   )
   const stored: Bill[] = records
     .filter((r) => r.due >= start && r.due <= end)

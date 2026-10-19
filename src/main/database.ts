@@ -1,4 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
+import { FinanceStore } from './finance'
+import type { CsvOperation } from '../shared/csv-model'
+import type { ImportBatch } from '../shared/analytics-model'
 import { LedgerStore } from './ledger'
 import { localDate } from '../shared/billing'
 import { priceAt } from '../shared/ledger-model'
@@ -23,6 +26,7 @@ import type { ExchangeRates } from '../shared/exchange'
 export class SubscriptionRepository {
   private db: DatabaseSync
   readonly ledger: LedgerStore
+  readonly finance: FinanceStore
   constructor(
     path: string,
     private now = () => new Date()
@@ -31,12 +35,12 @@ export class SubscriptionRepository {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
     const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })
       .user_version
-    if (version > 3) {
+    if (version > 4) {
       this.db.close()
       throw new Error('数据库由较新版本创建，请升级续订后再打开。')
     }
-    if (version > 0 && version < 3 && path !== ':memory:') {
-      const snapshot = path + '.pre-v3-' + Date.now() + '.db'
+    if (version > 0 && version < 4 && path !== ':memory:') {
+      const snapshot = path + '.pre-v4-' + Date.now() + '.db'
       this.db.exec("VACUUM INTO '" + snapshot.replaceAll("'", "''") + "'")
     }
     if (version === 0)
@@ -62,6 +66,14 @@ export class SubscriptionRepository {
       `)
         for (const item of this.rawList()) this.ledger.ensure(item)
         this.db.exec('PRAGMA user_version=3')
+      })
+    this.finance = new FinanceStore(this.db, this.now)
+    if (version < 4)
+      this.transaction(() => {
+        this.db.exec(`CREATE TABLE budgets(month TEXT PRIMARY KEY, document TEXT NOT NULL);
+        CREATE TABLE budget_reminders(key TEXT PRIMARY KEY,sent_at TEXT NOT NULL);
+        CREATE TABLE import_batches(id TEXT PRIMARY KEY,document TEXT NOT NULL,created_at TEXT NOT NULL);
+        PRAGMA user_version=4;`)
       })
   }
   list(): Subscription[] {
@@ -179,7 +191,10 @@ export class SubscriptionRepository {
   export(): Backup {
     return {
       format: 'xuding',
-      version: 2,
+      version: 3,
+      budgets: this.finance.budgets(),
+      budgetReminders: this.finance.reminders(),
+      importBatches: this.finance.batches(),
       bills: this.ledger.bills(),
       prices: this.ledger.prices(),
       changes: this.ledger.changes(),
@@ -203,9 +218,14 @@ export class SubscriptionRepository {
       )
       .run(JSON.stringify(exchangeRatesSchema.parse(table)))
   }
-  import(raw: unknown): number {
+  import(raw: unknown, replace = false): number {
     const backup = backupSchema.parse(raw)
+    if (replace && backup.version !== 3) throw new Error('完整恢复需要 v0.4 导出的新版备份。')
     this.transaction(() => {
+      if (replace)
+        this.db.exec(
+          'DELETE FROM ledger_changes;DELETE FROM bills;DELETE FROM prices;DELETE FROM billing_tracking;DELETE FROM subscriptions;'
+        )
       for (const item of backup.subscriptions) {
         this.upsert(item)
         this.audit(item)
@@ -214,13 +234,52 @@ export class SubscriptionRepository {
           this.ledger.recordPrice(item)
         }
       }
-      if (backup.version === 2)
+      if (backup.version >= 2)
         this.ledger.import(
-          backup,
+          backup as Exclude<Backup, { version: 1 }>,
           backup.subscriptions.map((s) => s.id)
         )
+      if (backup.version === 3) this.finance.import(backup, replace)
     })
     return backup.subscriptions.length
+  }
+  commitCsv(operations: CsvOperation[], batch: ImportBatch, expectedRevision: number) {
+    if (expectedRevision !== this.revision()) throw new Error('账本已发生变化，请重新预览后导入。')
+    this.transaction(() => {
+      for (const op of operations) {
+        if (op.kind === 'subscription') {
+          const previous = this.get(op.item.id)
+          this.upsert(op.item)
+          this.audit(op.item)
+          this.ledger.ensure(op.item)
+          this.ledger.importPrice(op.item, op.effectiveOn)
+          if (
+            previous &&
+            (previous.anchorDate !== op.item.anchorDate ||
+              previous.autoRenew !== op.item.autoRenew ||
+              previous.status !== op.item.status ||
+              previous.cycle !== op.item.cycle ||
+              previous.interval !== op.item.interval)
+          )
+            this.ledger.reconsiderToday(op.item.id)
+        } else {
+          if (op.createSubscription) {
+            const { id, ...input } = op.createSubscription
+            const item = subscriptionSchema.parse({
+              ...input,
+              id,
+              createdAt: this.now().toISOString(),
+              updatedAt: this.now().toISOString()
+            })
+            this.upsert(item)
+            this.audit(item)
+            this.ledger.ensure(item)
+          }
+          this.ledger.importBill(op.item)
+        }
+      }
+      this.finance.recordBatch(batch)
+    })
   }
   hasReminder(key: string): boolean {
     return Boolean(this.db.prepare('SELECT key FROM reminders WHERE key=?').get(key))

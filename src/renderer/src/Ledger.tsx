@@ -149,6 +149,12 @@ export function BillEditor({
             />
           </label>
         </div>
+        {bill?.conversion?.source === 'manual' && (
+          <p className="footnote">
+            历史折算已记录为 {formatMoney(bill.conversion.amountMinor, bill.conversion.currency)}
+            。保留实际金额与币种时沿用该值；修改金额或币种后会改用确认时参考汇率。
+          </p>
+        )}
         <p className="footnote">
           按实际支付日期计入支出。支付币种可与订阅币种不同，例如填写银行卡实际扣款的人民币金额。
           {bill?.status === 'paid'

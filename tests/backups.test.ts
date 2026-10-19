@@ -148,53 +148,81 @@ describe('automatic backups and guarded restoration', () => {
     })
     await expect(service.restore(second.token)).rejects.toThrow('账本已发生变化')
   })
-  it.each([1, 2])('upgrades database version %i with an intact SQLite recovery copy', (version) => {
-    const file = join(directory, 'legacy.db')
-    const legacy = new DatabaseSync(file)
-    legacy.exec(
-      'CREATE TABLE subscriptions (id TEXT PRIMARY KEY, document TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE subscription_changes (id INTEGER PRIMARY KEY, subscription_id TEXT NOT NULL, document TEXT NOT NULL, changed_at TEXT NOT NULL); CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE reminders (key TEXT PRIMARY KEY,sent_at TEXT NOT NULL); PRAGMA user_version=1;'
-    )
-    legacy.exec(`PRAGMA user_version=${version}`)
-    const item = subscription({ anchorDate: '2025-01-31' })
-    legacy
-      .prepare('INSERT INTO subscriptions VALUES(?,?,?)')
-      .run(item.id, JSON.stringify(item), item.updatedAt)
-    legacy
-      .prepare('INSERT INTO settings VALUES(?,?)')
-      .run('preferences', JSON.stringify({ notificationsEnabled: true }))
-    legacy.close()
-    const migrated = new SubscriptionRepository(file, () => new Date('2026-01-31T12:00:00+08:00'))
-    try {
-      expect(migrated.list()).toEqual([item])
-      expect(migrated.settings()).toMatchObject({
-        notificationsEnabled: true,
-        closeBehavior: 'ask',
-        autoBackupEnabled: true,
-        launchAtLogin: false
-      })
-      expect(migrated.export().subscriptions[0].accessEndsOn).toBeUndefined()
-      expect(migrated.ledger.bills()).toHaveLength(0)
-      migrated.ledger.sync()
-      expect(migrated.ledger.bills().map((b) => b.due)).toEqual(['2026-01-31'])
-    } finally {
-      migrated.close()
+  it.each([1, 2, 3])(
+    'upgrades database version %i with an intact SQLite recovery copy',
+    (version) => {
+      const file = join(directory, 'legacy.db')
+      const legacy = new DatabaseSync(file)
+      legacy.exec(
+        'CREATE TABLE subscriptions (id TEXT PRIMARY KEY, document TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE subscription_changes (id INTEGER PRIMARY KEY, subscription_id TEXT NOT NULL, document TEXT NOT NULL, changed_at TEXT NOT NULL); CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE reminders (key TEXT PRIMARY KEY,sent_at TEXT NOT NULL); PRAGMA user_version=1;'
+      )
+      if (version === 3)
+        legacy.exec(
+          `CREATE TABLE bills(id TEXT PRIMARY KEY,subscription_id TEXT,due TEXT,manual INTEGER,document TEXT);CREATE TABLE prices(id TEXT PRIMARY KEY,subscription_id TEXT,effective_on TEXT,document TEXT,UNIQUE(subscription_id,effective_on));CREATE TABLE ledger_changes(id TEXT PRIMARY KEY,subscription_id TEXT,document TEXT);CREATE TABLE billing_tracking(subscription_id TEXT PRIMARY KEY,document TEXT);CREATE TABLE ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT);`
+        )
+      legacy.exec(`PRAGMA user_version=${version}`)
+      const item = subscription({ anchorDate: '2025-01-31' })
+      legacy
+        .prepare('INSERT INTO subscriptions VALUES(?,?,?)')
+        .run(item.id, JSON.stringify(item), item.updatedAt)
+      legacy
+        .prepare('INSERT INTO settings VALUES(?,?)')
+        .run('preferences', JSON.stringify({ notificationsEnabled: true }))
+      if (version === 3) {
+        const price = {
+          id: '00000000-0000-4000-8000-000000000009',
+          subscriptionId: item.id,
+          amountMinor: item.amountMinor,
+          currency: item.currency,
+          effectiveOn: '1970-01-01',
+          createdAt: item.createdAt
+        }
+        legacy
+          .prepare('INSERT INTO prices VALUES(?,?,?,?)')
+          .run(price.id, item.id, price.effectiveOn, JSON.stringify(price))
+        legacy.prepare('INSERT INTO billing_tracking VALUES(?,?)').run(
+          item.id,
+          JSON.stringify({
+            subscriptionId: item.id,
+            startedOn: '2026-01-31',
+            through: '2026-01-30'
+          })
+        )
+      }
+      legacy.close()
+      const migrated = new SubscriptionRepository(file, () => new Date('2026-01-31T12:00:00+08:00'))
+      try {
+        expect(migrated.list()).toEqual([item])
+        expect(migrated.settings()).toMatchObject({
+          notificationsEnabled: true,
+          closeBehavior: 'ask',
+          autoBackupEnabled: true,
+          launchAtLogin: false
+        })
+        expect(migrated.export().subscriptions[0].accessEndsOn).toBeUndefined()
+        expect(migrated.ledger.bills()).toHaveLength(0)
+        migrated.ledger.sync()
+        expect(migrated.ledger.bills().map((b) => b.due)).toEqual(['2026-01-31'])
+      } finally {
+        migrated.close()
+      }
+      const check = new DatabaseSync(file)
+      try {
+        expect(check.prepare('PRAGMA user_version').get()!.user_version).toBe(4)
+      } finally {
+        check.close()
+      }
+      const snapshot = readdirSync(directory).find((name) => name.startsWith('legacy.db.pre-v4-'))!
+      expect(snapshot).toBeTruthy()
+      const before = new DatabaseSync(join(directory, snapshot), { readOnly: true })
+      try {
+        expect(before.prepare('PRAGMA user_version').get()!.user_version).toBe(version)
+        expect(
+          JSON.parse(String(before.prepare('SELECT document FROM subscriptions').get()!.document))
+        ).toEqual(item)
+      } finally {
+        before.close()
+      }
     }
-    const check = new DatabaseSync(file)
-    try {
-      expect(check.prepare('PRAGMA user_version').get()!.user_version).toBe(3)
-    } finally {
-      check.close()
-    }
-    const snapshot = readdirSync(directory).find((name) => name.startsWith('legacy.db.pre-v3-'))!
-    expect(snapshot).toBeTruthy()
-    const before = new DatabaseSync(join(directory, snapshot), { readOnly: true })
-    try {
-      expect(before.prepare('PRAGMA user_version').get()!.user_version).toBe(version)
-      expect(
-        JSON.parse(String(before.prepare('SELECT document FROM subscriptions').get()!.document))
-      ).toEqual(item)
-    } finally {
-      before.close()
-    }
-  })
+  )
 })

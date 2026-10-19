@@ -37,11 +37,15 @@ const timestamp = (value: string) => new Date(value).toLocaleString('zh-CN', { h
 export function SettingsPage({
   snapshot,
   onReload,
-  onNotice
+  onNotice,
+  onCsvImport,
+  onCsvExport
 }: {
   snapshot: Snapshot
   onReload: () => Promise<Snapshot>
   onNotice: (message: string) => void
+  onCsvImport: () => void
+  onCsvExport: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -49,6 +53,8 @@ export function SettingsPage({
   const [history, setHistory] = useState<BackupEntry[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [preview, setPreview] = useState<RestorePreview | null>(null)
+  const [restoreMode, setRestoreMode] = useState<'merge' | 'replace'>('merge')
+  useEffect(() => setRestoreMode('merge'), [preview?.token])
   const settings = snapshot.settings
   useEffect(() => {
     let active = true
@@ -126,6 +132,29 @@ export function SettingsPage({
               {toggle('开启桌面通知', settings.notificationsEnabled, (value) => ({
                 notificationsEnabled: value
               }))}
+            </div>
+          </Region>
+          <Region
+            title="预算提醒"
+            help="根据本月已支付金额判断预算阈值，每月每个阈值提醒一次。修改额度后重新判断；缺少折算信息时暂停相关提醒。"
+          >
+            <div className="setting-row">
+              <span>
+                <strong>预算桌面通知</strong>
+                <small>达到提前提醒阈值或预算用尽时通知，可独立开启。</small>
+              </span>
+              {toggle('预算桌面通知', settings.budgetNotificationsEnabled, (value) => ({
+                budgetNotificationsEnabled: value
+              }))}
+            </div>
+          </Region>
+          <Region
+            title="数据迁移"
+            help="CSV 用于表格交换，完整恢复请使用 JSON 备份。导入前会先保存安全副本，预览并处理重复项后再写入。"
+          >
+            <div className="backup-actions">
+              <Button onClick={onCsvImport}>导入 CSV</Button>
+              <Button onClick={onCsvExport}>导出 CSV / 模板</Button>
             </div>
           </Region>
           <Region title="启动与后台">
@@ -356,7 +385,7 @@ export function SettingsPage({
         onOk={() =>
           void run(async () => {
             if (!preview) return
-            const count = unwrap(await window.desktop.restoreBackup(preview.token))
+            const count = unwrap(await window.desktop.restoreBackup(preview.token, restoreMode))
             setPreview(null)
             setHistoryOpen(false)
             await onReload()
@@ -376,6 +405,27 @@ export function SettingsPage({
                 ? '旧版备份仅包含订阅，现有账单与价格历史会保留。'
                 : `包含 ${preview.bills} 笔账单、${preview.prices} 条价格记录；覆盖订阅时一并恢复其账单与价格历史。`}
             </p>
+            {preview.fullRestoreSupported && (
+              <div className="restore-mode">
+                <label>
+                  恢复方式
+                  <SelectField
+                    label="恢复方式"
+                    value={restoreMode}
+                    onChange={(v) => setRestoreMode(v as 'merge' | 'replace')}
+                    options={[
+                      { value: 'merge', label: '按订阅 ID 合并' },
+                      { value: 'replace', label: '完整恢复整个账本' }
+                    ]}
+                  />
+                </label>
+                <p className="footnote">
+                  {restoreMode === 'replace'
+                    ? `将移除备份之外的 ${preview.retained} 项订阅及其账单，并将预算和导入记录恢复至备份状态，可用于撤销整批 CSV 导入。`
+                    : `包含 ${preview.budgets} 个月预算；备份之外的记录继续保留。`}
+                </p>
+              </div>
+            )}
             <div className="restore-counts">
               <span>
                 新增<strong>{preview.added}</strong>

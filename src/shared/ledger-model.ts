@@ -20,6 +20,19 @@ export const paymentSchema = z
   .object({ amountMinor: amount, currency: z.enum(currencies), paidOn: dateSchema })
   .strict()
 export type Payment = z.infer<typeof paymentSchema>
+export const conversionSchema = z.discriminatedUnion('source', [
+  z.object({ source: z.literal('confirmation') }).strict(),
+  z.object({ source: z.literal('import-current') }).strict(),
+  z.object({ source: z.literal('import-none') }).strict(),
+  z
+    .object({
+      source: z.literal('manual'),
+      amountMinor: amount,
+      currency: z.enum(currencies),
+      date: dateSchema.optional()
+    })
+    .strict()
+])
 export const billRecordSchema = z
   .object({
     id: z.string().uuid(),
@@ -32,13 +45,26 @@ export const billRecordSchema = z
     manual: z.boolean(),
     payment: paymentSchema.nullable(),
     rates: exchangeRatesSchema.nullable(),
+    conversion: conversionSchema.optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime()
   })
   .strict()
   .refine(
-    (b) => (b.status === 'paid' ? b.payment !== null : b.payment === null && b.rates === null),
+    (b) =>
+      b.status === 'paid'
+        ? b.payment !== null
+        : b.payment === null && b.rates === null && b.conversion === undefined,
     '账单状态与支付信息不一致'
+  )
+  .refine(
+    (b) =>
+      b.conversion?.source !== 'manual' ||
+      !b.payment ||
+      ((b.payment.amountMinor !== 0 || b.conversion.amountMinor === 0) &&
+        (b.payment.currency !== b.conversion.currency ||
+          b.payment.amountMinor === b.conversion.amountMinor)),
+    '历史折算金额与原币金额不一致'
   )
 export type BillRecord = z.infer<typeof billRecordSchema>
 export const billInputSchema = z
