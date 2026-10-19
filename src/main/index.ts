@@ -7,6 +7,7 @@ import {
   nativeImage,
   net,
   Notification,
+  powerMonitor,
   shell
 } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -17,10 +18,13 @@ import { pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import { SubscriptionRepository } from './database'
 import { ExchangeService } from './exchange'
-import { backupSchema, settingsSchema, subscriptionInputSchema } from '../shared/model'
+import { BackupService } from './backups'
+import { DesktopLifecycle } from './desktop'
+import { settingsPatchSchema, settingsSchema, subscriptionInputSchema } from '../shared/model'
 import { channels } from '../shared/channels'
-import type { Result } from '../shared/model'
-import { daysBetween, formatMoney, localDate, nextBills } from '../shared/billing'
+import type { Result, DesktopAction } from '../shared/model'
+import { localDate } from '../shared/billing'
+import { reminderCandidates } from '../shared/attention'
 
 app.setName('xuding')
 if (process.env.XUDING_DATA_DIR && isAbsolute(process.env.XUDING_DATA_DIR)) {
@@ -31,6 +35,12 @@ app.setAppUserModelId('io.github.ztbytd.xuding')
 let window: BrowserWindow | null = null
 let repository: SubscriptionRepository
 let exchange: ExchangeService
+let backups: BackupService
+let desktop: DesktopLifecycle
+let rendererReady = false
+let pendingAction: DesktopAction | null = null
+let sequence = 0
+const remindersInFlight = new Set<string>()
 let reminderTimer: ReturnType<typeof setInterval> | undefined
 const devUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const rendererPath = join(__dirname, '../renderer/index.html')
@@ -62,6 +72,12 @@ function handle(channel: string, handler: (...args: any[]) => unknown): void {
 }
 
 function registerApi(): void {
+  handle(channels.navigationReady, () => {
+    rendererReady = true
+    const action = pendingAction
+    pendingAction = null
+    return action
+  })
   handle(channels.exchangeRates, (force) => exchange.get(z.boolean().optional().parse(force)))
   handle(channels.pickIcon, async () => {
     if (!window) return null
@@ -87,16 +103,47 @@ function registerApi(): void {
     subscriptions: repository.list(),
     settings: repository.settings(),
     exchangeRates: repository.exchangeRates(),
-    version: app.getVersion()
+    version: app.getVersion(),
+    backupStatus: backups.status(),
+    startupSupported: desktop.startupSupported
   }))
-  handle(channels.save, (raw, id) =>
-    repository.save(
+  handle(channels.save, (raw, id) => {
+    const item = repository.save(
       subscriptionInputSchema.parse(raw),
       id === undefined ? undefined : z.string().uuid().parse(id)
     )
-  )
-  handle(channels.archive, (id) => repository.archive(z.string().uuid().parse(id)))
-  handle(channels.settings, (raw) => repository.saveSettings(settingsSchema.parse(raw)))
+    backups.changed()
+    return item
+  })
+  handle(channels.archive, (id) => {
+    repository.archive(z.string().uuid().parse(id))
+    backups.changed()
+  })
+  handle(channels.settings, (raw) => {
+    const patch = settingsPatchSchema.parse(raw),
+      previous = repository.settings()
+    const next = settingsSchema.parse({ ...previous, ...patch })
+    if (!next.launchAtLogin) next.startInTray = false
+    desktop.updateLogin(previous, next)
+    const saved = repository.saveSettings(next)
+    backups.changed()
+    return saved
+  })
+  handle(channels.backupStatus, () => backups.status())
+  handle(channels.backupNow, () => backups.nowBackup())
+  handle(channels.backupHistory, () => backups.history())
+  handle(channels.previewBackup, (id) => backups.preview(z.string().max(120).parse(id)))
+  handle(channels.restoreBackup, (token) => backups.restore(z.string().uuid().parse(token)))
+  handle(channels.chooseBackupDirectory, async () => {
+    if (!window) return backups.status()
+    const picked = await dialog.showOpenDialog(window, {
+      title: '选择备份位置',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    return picked.canceled || !picked.filePaths[0]
+      ? backups.status()
+      : backups.setDirectory(picked.filePaths[0])
+  })
   handle(channels.openWebsite, async (raw) => {
     const url = z.string().max(2048).parse(raw)
     const parsed = new URL(url)
@@ -118,7 +165,7 @@ function registerApi(): void {
     })
     return true
   })
-  handle(channels.importBackup, async () => {
+  handle(channels.previewImport, async () => {
     if (!window) return null
     const picked = await dialog.showOpenDialog(window, {
       title: '导入续订备份',
@@ -126,43 +173,42 @@ function registerApi(): void {
       filters: [{ name: 'JSON 备份', extensions: ['json'] }]
     })
     if (picked.canceled || !picked.filePaths[0]) return null
-    if ((await stat(picked.filePaths[0])).size > 50 * 1024 * 1024)
-      throw new Error('备份文件不能超过 50 MB。')
-    const backup = backupSchema.parse(JSON.parse(await readFile(picked.filePaths[0], 'utf8')))
-    const confirmation = await dialog.showMessageBox(window, {
-      type: 'question',
-      buttons: ['取消', '导入'],
-      defaultId: 0,
-      cancelId: 0,
-      title: '导入备份',
-      message: `导入 ${backup.subscriptions.length} 项订阅？`,
-      detail: '相同 ID 的订阅将被备份内容覆盖；其他现有订阅会保留。'
-    })
-    return confirmation.response === 1 ? repository.import(backup) : null
+    return backups.prepareFile(picked.filePaths[0])
   })
 }
 function checkReminders(): void {
   if (!repository.settings().notificationsEnabled || !Notification.isSupported()) return
-  const today = localDate()
-  for (const subscription of repository.list()) {
-    const bill = nextBills(subscription, today, 1)[0]
-    if (!bill) continue
-    const days = daysBetween(today, bill.due)
-    const key = `${subscription.id}:${bill.due}`
-    if (days > subscription.reminderDays || repository.hasReminder(key)) continue
+  for (const candidate of reminderCandidates(repository.list(), localDate())) {
+    const key = candidate.key
+    if (repository.hasReminder(key) || remindersInFlight.has(key)) continue
+    remindersInFlight.add(key)
     const notification = new Notification({
-      title: `${subscription.name} · 续费提醒`,
-      body: `${days === 0 ? '今天' : `${days} 天后`}预计扣款 ${formatMoney(bill.amountMinor, subscription.currency)}${subscription.status === 'trial' ? '（试用结束）' : ''}`
+      title: candidate.title,
+      body: candidate.body
     })
-    notification.on('click', () => {
-      window?.show()
-      window?.focus()
+    notification.on('click', () => showWindow({ page: 'detail', id: candidate.id }))
+    notification.on('show', () => {
+      repository.markReminder(key)
+      remindersInFlight.delete(key)
     })
-    notification.on('show', () => repository.markReminder(key))
+    notification.on('failed', () => remindersInFlight.delete(key))
+    setTimeout(() => remindersInFlight.delete(key), 30_000).unref()
     notification.show()
   }
 }
+function showWindow(action?: { page: 'new' } | { page: 'detail'; id: string }): void {
+  if (!window) createWindow()
+  if (window?.isMinimized()) window.restore()
+  window?.show()
+  window?.focus()
+  if (action) {
+    const value: DesktopAction = { ...action, sequence: ++sequence }
+    if (rendererReady && window) window.webContents.send(channels.navigate, value)
+    else pendingAction = value
+  }
+}
 function createWindow(): void {
+  rendererReady = false
   window = new BrowserWindow({
     width: 1220,
     height: 860,
@@ -187,12 +233,18 @@ function createWindow(): void {
   })
   Menu.setApplicationMenu(null)
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('did-start-loading', () => {
+    rendererReady = false
+  })
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
     callback(false)
   )
   window.webContents.session.setPermissionCheckHandler(() => false)
-  window.once('ready-to-show', () => window?.show())
+  desktop.attach(window)
+  window.once('ready-to-show', () => {
+    if (!desktop.startHidden() || pendingAction) window?.show()
+  })
   window.on('closed', () => {
     window = null
   })
@@ -203,16 +255,18 @@ function createWindow(): void {
 if (!app.requestSingleInstanceLock()) app.quit()
 else {
   app.on('second-instance', () => {
-    if (window?.isMinimized()) window.restore()
-    window?.show()
-    window?.focus()
+    showWindow()
   })
   void app
     .whenReady()
     .then(async () => {
       await mkdir(app.getPath('userData'), { recursive: true })
       repository = new SubscriptionRepository(join(app.getPath('userData'), 'xuding.db'))
+      backups = new BackupService(repository, join(app.getPath('userData'), 'backups'))
       exchange = new ExchangeService(repository, (input, init) => net.fetch(input, init))
+      desktop = new DesktopLifecycle(repository, backups, (add) =>
+        showWindow(add ? { page: 'new' } : undefined)
+      )
       registerApi()
       createWindow()
       const reminders = () => {
@@ -223,9 +277,12 @@ else {
         }
       }
       reminderTimer = setInterval(reminders, 60_000)
+      powerMonitor.on('resume', reminders)
+      powerMonitor.on('unlock-screen', reminders)
+      void backups.automatic().catch((error) => console.error('Automatic backup failed', error))
       setTimeout(reminders, 5000).unref()
       app.on('activate', () => {
-        if (!window) createWindow()
+        showWindow()
       })
     })
     .catch((error) => {

@@ -120,6 +120,7 @@ test('icons persist in backups and overview explains renewal status', async ({},
     }, backupPath)
     await go('设置与备份')
     await page.getByRole('button', { name: '导入备份', exact: true }).click()
+    await page.getByRole('button', { name: '确认恢复', exact: true }).click()
     await expect(page.getByRole('status')).toContainText('已导入 1 项订阅')
     await app.close()
     app = await launch()

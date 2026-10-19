@@ -11,7 +11,6 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  Download,
   ExternalLink,
   Layers,
   LayoutDashboard,
@@ -21,7 +20,6 @@ import {
   RefreshCw,
   Search,
   Settings as SettingsIcon,
-  ShieldCheck,
   Upload,
   X
 } from 'lucide-react'
@@ -32,7 +30,8 @@ import type {
   Result,
   Snapshot,
   Subscription,
-  SubscriptionInput
+  SubscriptionInput,
+  DesktopAction
 } from '../../shared/model'
 import {
   addDays,
@@ -52,6 +51,8 @@ import { useSidebar } from './useSidebar'
 import { HelpTip, SelectField } from './controls'
 import { convertMinor } from '../../shared/exchange'
 import type { ExchangeRates } from '../../shared/exchange'
+import { SettingsPage } from './SettingsPage'
+import { accessLabel, attentionItems } from '../../shared/attention'
 
 type MainPage = 'overview' | 'list' | 'calendar' | 'settings'
 type Route =
@@ -229,6 +230,8 @@ export function App() {
   const [month, setMonth] = useState(today.slice(0, 7))
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [archiveId, setArchiveId] = useState<string | null>(null)
+  const [allAttention, setAllAttention] = useState(false)
+  const navigationSequence = useRef(0)
 
   const reload = useCallback(async () => {
     const value = unwrap(await window.desktop.load())
@@ -249,6 +252,31 @@ export function App() {
     void reload().catch((e) => setError(String(e.message)))
     const timer = setInterval(() => setToday(localDate()), 30_000)
     return () => clearInterval(timer)
+  }, [reload])
+  useEffect(() => {
+    const navigate = (action: DesktopAction) => {
+      if (action.sequence <= navigationSequence.current) return
+      navigationSequence.current = action.sequence
+      void reload()
+        .then(() => {
+          if (action.sequence !== navigationSequence.current) return
+          setRoute(
+            action.page === 'new'
+              ? { page: 'edit', from: 'list' }
+              : { page: 'detail', id: action.id, from: 'overview' }
+          )
+        })
+        .catch((error) => setError(String(error.message)))
+    }
+    const unsubscribe = window.desktop.onNavigate(navigate)
+    void window.desktop
+      .navigationReady()
+      .then((result) => {
+        const action = unwrap(result)
+        if (action) navigate(action)
+      })
+      .catch((error) => setError(String(error.message)))
+    return unsubscribe
   }, [reload])
   useEffect(() => {
     setArchiveId(null)
@@ -333,12 +361,7 @@ export function App() {
       : !summary.count
         ? `当前 ${current.length} 项订阅均已关闭续费，未计入预计支出。`
         : '未来 30 天没有预计扣款。'
-    const trial = summary.bills.find(
-      (b) =>
-        b.subscription.status === 'trial' &&
-        b.due === b.subscription.anchorDate &&
-        daysBetween(today, b.due) <= 7
-    )
+    const attention = attentionItems(data, today)
     return (
       <>
         <header className="page-head">
@@ -423,21 +446,35 @@ export function App() {
             <strong>{money(summary.upcoming)}</strong>
           </div>
         </div>
-        {trial && (
-          <div className="notice-banner">
-            <Bell size={18} />
-            <span>
-              {trial.subscription.name} 将于 {formatDate(trial.due)} 结束试用，预计扣款{' '}
-              {formatMoney(trial.amountMinor, trial.subscription.currency)}（原币）
-            </span>
-            <button
-              className="text-button"
-              onClick={() => openDetail(trial.subscription.id, 'overview')}
-            >
-              查看详情
-              <ArrowRight size={14} />
-            </button>
-          </div>
+        {attention.length > 0 && (
+          <Panel
+            title="需要关注"
+            className="attention-panel"
+            extra={<span className="small muted">{attention.length} 项</span>}
+          >
+            {(allAttention ? attention : attention.slice(0, 4)).map((item) => (
+              <button
+                key={item.subscription.id}
+                className="attention-item"
+                onClick={() => openDetail(item.subscription.id, 'overview')}
+                aria-label={`查看 ${item.subscription.name} 详情`}
+              >
+                <Bell size={16} />
+                <span>
+                  <strong>{item.subscription.name}</strong>
+                  <small>
+                    {item.label} · {item.date}
+                  </small>
+                </span>
+                <ChevronRight size={16} className="chevron" />
+              </button>
+            ))}
+            {attention.length > 4 && (
+              <button className="text-button" onClick={() => setAllAttention(!allAttention)}>
+                {allAttention ? '收起' : `查看全部 ${attention.length} 项`}
+              </button>
+            )}
+          </Panel>
         )}
         <div className="overview-columns">
           <Panel
@@ -573,6 +610,9 @@ export function App() {
                   <small>
                     {s.category}
                     {next ? ` · ${formatDate(next.due)} 预计扣款` : ''}
+                    {!s.autoRenew && s.status !== 'archived'
+                      ? ` · ${accessLabel(s, today)}${s.accessEndsOn ? `（${s.accessEndsOn}）` : ''}`
+                      : ''}
                   </small>
                 </span>
                 <span className="row-price">
@@ -654,6 +694,16 @@ export function App() {
                 <dt>下次预计扣款</dt>
                 <dd>{next ? formatDate(next.due) : '暂无计划'}</dd>
               </div>
+              <div>
+                <dt>权益到期日</dt>
+                <dd>{s.accessEndsOn ? formatDate(s.accessEndsOn) : '到期日未记录'}</dd>
+              </div>
+              {s.accessEndsOn && (
+                <div>
+                  <dt>剩余权益</dt>
+                  <dd>{accessLabel(s, today)}</dd>
+                </div>
+              )}
               <div>
                 <dt>下次预计金额</dt>
                 <dd>{next ? formatMoney(next.amountMinor, s.currency) : '—'}</dd>
@@ -886,103 +936,7 @@ export function App() {
     )
   }
   function settings() {
-    return (
-      <>
-        <header className="page-head">
-          <div>
-            <h1>设置与备份</h1>
-            <p>数据留在本机，由你掌握。</p>
-          </div>
-          <ShieldCheck className="muted" size={28} />
-        </header>
-        <Panel
-          title="桌面提醒"
-          help="关闭应用或电脑休眠期间不会发送通知。系统关闭通知时也可能收不到提醒。"
-        >
-          <div className="setting-row">
-            <span>
-              <strong>到期通知</strong>
-              <small>应用运行时，按每项订阅的提前天数发送系统通知，每期最多一次。</small>
-            </span>
-            <Switch
-              aria-label="开启桌面通知"
-              checked={snapshot?.settings.notificationsEnabled || false}
-              disabled={busy}
-              onChange={(enabled) => {
-                void perform(async () => {
-                  unwrap(await window.desktop.settings({ notificationsEnabled: enabled }))
-                  await reload()
-                  setNotice(enabled ? '已开启桌面通知。' : '已关闭桌面通知。')
-                })
-              }}
-            />
-          </div>
-        </Panel>
-        <Panel
-          title="数据备份"
-          className="spaced"
-          help="本地数据库与备份均未加密，建议将备份保存在可信位置。"
-        >
-          <div className="setting-row">
-            <span>
-              <strong>导出订阅</strong>
-              <small>导出 JSON 文件，包含订阅信息、图标和备注，不包含修改历史。</small>
-            </span>
-            <button
-              className="secondary"
-              disabled={busy}
-              onClick={() =>
-                void perform(async () => {
-                  if (unwrap(await window.desktop.exportBackup())) setNotice('备份已导出。')
-                })
-              }
-            >
-              <Download size={16} />
-              导出备份
-            </button>
-          </div>
-          <div className="setting-row">
-            <span>
-              <strong>导入备份</strong>
-              <small>相同 ID 的订阅会覆盖，其他订阅保留。导入前会再次确认。</small>
-            </span>
-            <button
-              className="secondary"
-              disabled={busy}
-              onClick={() =>
-                void perform(async () => {
-                  const count = unwrap(await window.desktop.importBackup())
-                  if (count !== null) {
-                    await reload()
-                    setNotice(`已导入 ${count} 项订阅。`)
-                  }
-                })
-              }
-            >
-              <Upload size={16} />
-              导入备份
-            </button>
-          </div>
-        </Panel>
-        <Panel title="关于续订" className="spaced">
-          <p className="notes">一个本地优先的开源订阅账本。支持离线使用，无需账号。</p>
-          <dl className="facts">
-            <div>
-              <dt>版本</dt>
-              <dd>{snapshot?.version}</dd>
-            </div>
-            <div>
-              <dt>开源许可</dt>
-              <dd>MIT</dd>
-            </div>
-            <div>
-              <dt>数据存储</dt>
-              <dd>本机 SQLite 数据库</dd>
-            </div>
-          </dl>
-        </Panel>
-      </>
-    )
+    return <SettingsPage snapshot={snapshot!} onReload={reload} onNotice={setNotice} />
   }
 
   return (
@@ -1125,6 +1079,7 @@ function SubscriptionForm({
 }) {
   const [error, setError] = useState('')
   const [autoRenew, setAutoRenew] = useState(s?.autoRenew ?? true)
+  const [hasAccessDate, setHasAccessDate] = useState(!!s?.accessEndsOn)
   const [icon, setIcon] = useState(s?.icon)
   const [name, setName] = useState(s?.name || '')
   const [pickingIcon, setPickingIcon] = useState(false)
@@ -1160,6 +1115,7 @@ function SubscriptionForm({
       anchorDate: values.get('anchorDate'),
       status: values.get('status'),
       autoRenew: values.has('autoRenew'),
+      accessEndsOn: String(values.get('accessEndsOn') || '').trim() || undefined,
       reminderDays: Number(values.get('reminderDays')),
       website: values.get('website'),
       notes: values.get('notes')
@@ -1378,6 +1334,31 @@ function SubscriptionForm({
             {autoRenew && <input name="autoRenew" type="hidden" value="on" />}
             {autoRenew ? '自动续费已开启' : '自动续费已关闭'}
           </label>
+          <div className="access-date-field" hidden={autoRenew && !hasAccessDate}>
+            <label>
+              <span>权益到期日（可选）</span>
+              <DatePicker
+                name="accessEndsOn"
+                aria-label="权益到期日"
+                disabled={busy}
+                format="YYYY-MM-DD"
+                minDate={dayjs('1970-01-01')}
+                maxDate={dayjs('2100-12-31')}
+                preserveInvalidOnBlur
+                previewValue={false}
+                defaultValue={s?.accessEndsOn ? dayjs(s.accessEndsOn) : null}
+                onChange={(value) => setHasAccessDate(!!value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.preventDefault()
+                }}
+                suffixIcon={<CalendarDays size={16} />}
+                placeholder="选择服务可使用至哪一天"
+              />
+            </label>
+            <HelpTip label="权益到期日">
+              关闭续费后，服务可能仍可使用到某一天。填写此日期可以查看剩余权益并接收到期提醒；留空时不推算。
+            </HelpTip>
+          </div>
           <p className="footnote">
             试用订阅请将基准日设为试用结束后的首次扣款日。修改续费开关只影响本地账本，实际取消需到服务商处操作。
           </p>

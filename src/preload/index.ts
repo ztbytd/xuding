@@ -10,7 +10,22 @@ const api: DesktopApi = {
   archive: (id) => ipcRenderer.invoke(channels.archive, id),
   settings: (input) => ipcRenderer.invoke(channels.settings, input),
   exportBackup: () => ipcRenderer.invoke(channels.exportBackup),
-  importBackup: () => ipcRenderer.invoke(channels.importBackup),
+  previewImport: () => ipcRenderer.invoke(channels.previewImport),
+  previewBackup: (id) => ipcRenderer.invoke(channels.previewBackup, id),
+  restoreBackup: (token) => ipcRenderer.invoke(channels.restoreBackup, token),
+  backupStatus: () => ipcRenderer.invoke(channels.backupStatus),
+  backupNow: () => ipcRenderer.invoke(channels.backupNow),
+  backupHistory: () => ipcRenderer.invoke(channels.backupHistory),
+  chooseBackupDirectory: () => ipcRenderer.invoke(channels.chooseBackupDirectory),
+  onNavigate: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, action: Parameters<typeof listener>[0]) =>
+      listener(action)
+    ipcRenderer.on(channels.navigate, handler)
+    return () => {
+      ipcRenderer.removeListener(channels.navigate, handler)
+    }
+  },
+  navigationReady: () => ipcRenderer.invoke(channels.navigationReady),
   openWebsite: (url) => ipcRenderer.invoke(channels.openWebsite, url)
 }
 contextBridge.exposeInMainWorld('desktop', api)

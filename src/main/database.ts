@@ -3,10 +3,17 @@ import { randomUUID } from 'node:crypto'
 import {
   backupSchema,
   settingsSchema,
+  settingsPatchSchema,
   subscriptionInputSchema,
   subscriptionSchema
 } from '../shared/model'
-import type { Backup, Settings, Subscription, SubscriptionInput } from '../shared/model'
+import type {
+  Backup,
+  Settings,
+  SettingsPatch,
+  Subscription,
+  SubscriptionInput
+} from '../shared/model'
 import { exchangeRatesSchema } from '../shared/exchange'
 import type { ExchangeRates } from '../shared/exchange'
 
@@ -17,7 +24,7 @@ export class SubscriptionRepository {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
     const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })
       .user_version
-    if (version > 1) {
+    if (version > 2) {
       this.db.close()
       throw new Error('数据库由较新版本创建，请升级续订后再打开。')
     }
@@ -28,9 +35,10 @@ export class SubscriptionRepository {
       CREATE TABLE subscription_changes (id INTEGER PRIMARY KEY, subscription_id TEXT NOT NULL, document TEXT NOT NULL, changed_at TEXT NOT NULL);
       CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE reminders (key TEXT PRIMARY KEY, sent_at TEXT NOT NULL);
-      PRAGMA user_version=1;
+      PRAGMA user_version=2;
       COMMIT;
     `)
+    if (version === 1) this.db.exec('PRAGMA user_version=2')
   }
   list(): Subscription[] {
     return this.db
@@ -91,18 +99,38 @@ export class SubscriptionRepository {
   }
   settings(): Settings {
     const row = this.db.prepare("SELECT value FROM settings WHERE key='preferences'").get()
-    return row
-      ? settingsSchema.parse(JSON.parse(String(row.value)))
-      : { notificationsEnabled: false }
+    return row ? settingsSchema.parse(JSON.parse(String(row.value))) : settingsSchema.parse({})
   }
-  saveSettings(input: Settings): Settings {
-    const value = settingsSchema.parse(input)
+  saveSettings(input: SettingsPatch): Settings {
+    const value = settingsSchema.parse({ ...this.settings(), ...settingsPatchSchema.parse(input) })
+    if (!value.launchAtLogin) value.startInTray = false
     this.db
       .prepare(
         "INSERT INTO settings(key,value) VALUES('preferences',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
       )
       .run(JSON.stringify(value))
     return value
+  }
+  revision(): number {
+    return Number(
+      this.db.prepare('SELECT COALESCE(MAX(id),0) AS revision FROM subscription_changes').get()!
+        .revision
+    )
+  }
+  metadata(key: string): unknown {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key)
+    try {
+      return row ? JSON.parse(String(row.value)) : null
+    } catch {
+      return null
+    }
+  }
+  saveMetadata(key: string, value: unknown): void {
+    this.db
+      .prepare(
+        'INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'
+      )
+      .run(key, JSON.stringify(value))
   }
   export(): Backup {
     return {

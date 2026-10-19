@@ -63,7 +63,7 @@ test('overview converts the whole ledger and survives missing rates, offline use
       path: testInfo.outputPath('exchange-overview.png'),
       animations: 'disabled'
     })
-    await page.getByRole('button', { name: '汇率说明' }).hover()
+    await page.getByRole('button', { name: '汇率说明' }).focus()
     await expect(page.getByRole('tooltip')).toContainText('参考日期：2026-10-16')
     await page.getByRole('combobox', { name: '统计币种' }).click()
     await page.getByRole('option', { name: '美元 USD', exact: true }).click()
