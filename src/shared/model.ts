@@ -173,13 +173,19 @@ export type BackupStatus = {
   lastSuccess: string | null
   lastError: string | null
   pending: boolean
+  encrypted?: boolean
 }
 export type BackupEntry = {
   id: string
   createdAt: string
-  count: number
+  count: number | null
   size: number
-  kind: 'daily' | 'manual' | 'before-restore'
+  kind: 'daily' | 'manual' | 'before-restore' | 'before-import'
+  encrypted?: boolean
+  state?: 'valid' | 'locked' | 'invalid'
+  error?: string
+  bills?: number
+  budgets?: number
 }
 export type RestorePreview = {
   token: string
@@ -213,6 +219,24 @@ export type Snapshot = {
 }
 
 export interface DesktopApi {
+  protectionStatus(): Promise<Result<import('./operations-model').ProtectionStatus>>
+  configureProtection(
+    input: import('./operations-model').BackupProtection
+  ): Promise<Result<import('./operations-model').ProtectionStatus>>
+  chooseImport(): Promise<Result<import('./operations-model').BackupSelection | null>>
+  selectBackup(id: string): Promise<Result<import('./operations-model').BackupSelection>>
+  unlockBackup(token: string, password?: string): Promise<Result<RestorePreview>>
+  removeBackup(id: string): Promise<Result<void>>
+  copyBackup(id: string): Promise<Result<boolean>>
+  openBackupDirectory(): Promise<Result<void>>
+  updateStatus(): Promise<Result<import('./operations-model').UpdateState>>
+  updateAction(
+    action: 'check' | 'download' | 'install'
+  ): Promise<Result<import('./operations-model').UpdateState>>
+  updatePreference(automatic: boolean): Promise<Result<import('./operations-model').UpdateState>>
+  diagnosticsExport(): Promise<Result<boolean>>
+  recoveryStatus(): Promise<Result<import('./operations-model').RecoveryState>>
+  recoveryAction(action: 'retry' | 'restore' | 'directory', id?: string): Promise<Result<void>>
   saveBudget(input: BudgetInput): Promise<Result<Budget>>
   csvChoose(): Promise<Result<CsvFile | null>>
   csvDecode(token: string, encoding: 'utf-8' | 'gb18030'): Promise<Result<CsvFile>>
@@ -226,7 +250,7 @@ export interface DesktopApi {
   changePrice(input: PriceInput): Promise<Result<void>>
   archive(id: string): Promise<Result<void>>
   settings(input: SettingsPatch): Promise<Result<Settings>>
-  exportBackup(): Promise<Result<boolean>>
+  exportBackup(options?: import('./operations-model').ExportBackupOptions): Promise<Result<boolean>>
   previewImport(): Promise<Result<RestorePreview | null>>
   previewBackup(id: string): Promise<Result<RestorePreview>>
   restoreBackup(token: string, mode?: 'merge' | 'replace'): Promise<Result<number>>

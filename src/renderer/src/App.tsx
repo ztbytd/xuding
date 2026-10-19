@@ -234,6 +234,23 @@ export function App() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [updateAvailable, setUpdateAvailable] = useState(false)
+  useEffect(() => {
+    let active = true
+    const refresh = () =>
+      void window.desktop
+        .updateStatus()
+        .then((result) => {
+          if (active && result.ok) setUpdateAvailable(!!result.data.version)
+        })
+        .catch(() => {})
+    refresh()
+    const timer = setInterval(refresh, 15000)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [])
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('全部分类')
   const [status, setStatus] = useState('current')
@@ -1185,6 +1202,9 @@ export function App() {
               >
                 <Icon size={19} aria-hidden="true" />
                 <span className="nav-label">{pageNames[page]}</span>
+                {page === 'settings' && updateAvailable && (
+                  <i className="update-dot" aria-hidden="true" title="有新版本可用" />
+                )}
                 {page === 'list' && (
                   <small>{data.filter((s) => s.status !== 'archived').length}</small>
                 )}

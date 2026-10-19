@@ -96,6 +96,10 @@ export class DesktopLifecycle {
         })
     })
   }
+  prepareUpdateExit(): void {
+    this.quitting = true
+    this.quitReady = true
+  }
   startHidden(): boolean {
     return (
       !!this.tray &&

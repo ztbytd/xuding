@@ -2,6 +2,7 @@ node_modules/
 out/
 dist/
 release/
+release-verify/
 coverage/
 test-results/
 test-results-*/
@@ -12,6 +13,12 @@ playwright-report/
 *.db
 *.db-shm
 *.db-wal
+*.db.fault-*
+*.db-wal.fault-*
+*.db-shm.fault-*
+*.credential
+*.xudingbackup
+*update-private*.pem
 *.sqlite
 *.log
 xuding-backup-*.json

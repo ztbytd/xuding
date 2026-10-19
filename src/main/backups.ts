@@ -1,11 +1,27 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, lstat, stat, open, rename, unlink } from 'node:fs/promises'
+import { mkdir, readFile, readdir, lstat, unlink } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { backupSchema } from '../shared/model'
 import type { Backup, BackupEntry, BackupStatus, RestorePreview } from '../shared/model'
 import { addDays, localDate } from '../shared/billing'
 import type { SubscriptionRepository } from './database'
+import { atomicWrite } from './files'
+import {
+  decodeBackup,
+  encodeBackup,
+  isEncryptedBackup,
+  MAX_BACKUP_FILE_BYTES,
+  parseBackupFile
+} from './backup-crypto'
+import type { BackupVault } from './credentials'
+import { backupProtectionSchema } from '../shared/operations-model'
+import type {
+  BackupProtection,
+  BackupSelection,
+  ExportBackupOptions,
+  ProtectionStatus
+} from '../shared/operations-model'
 
 const stateSchema = z.object({
   directory: z.string(),
@@ -15,29 +31,37 @@ const stateSchema = z.object({
   day: z.string()
 })
 const filename =
-  /^(daily-\d{4}-\d{2}-\d{2}|(manual|before-restore)-\d{4}-\d{2}-\d{2}-[a-f0-9-]{36})\.json$/
-const MAX_BYTES = 50 * 1024 * 1024
+  /^(daily-\d{4}-\d{2}-\d{2}|(manual|before-restore|before-import)-\d{4}-\d{2}-\d{2}-[a-f0-9-]{36})\.(json|xudingbackup)$/
 export class BackupService {
   private state: z.infer<typeof stateSchema>
   private timer: ReturnType<typeof setTimeout> | undefined
   private queue: Promise<unknown> = Promise.resolve()
   private previews = new Map<string, { backup: Backup; revision: number; expires: number }>()
+  private selections = new Map<string, { bytes: Buffer; source: string; expires: number }>()
+  private protection: { credential: string } | null = null
   constructor(
     private repo: SubscriptionRepository,
     defaultDirectory: string,
-    private now = () => new Date()
+    private now = () => new Date(),
+    private vault?: BackupVault,
+    private log: (event: string, error?: unknown) => void = () => {}
   ) {
     const stored = stateSchema.safeParse(repo.metadata('backup-state'))
     this.state = stored.success
       ? stored.data
       : { directory: defaultDirectory, lastSuccess: null, lastError: null, revision: -1, day: '' }
+    const protection = z
+      .object({ credential: z.string().uuid() })
+      .safeParse(repo.metadata('backup-protection'))
+    this.protection = protection.success ? protection.data : null
   }
   status(): BackupStatus {
     return {
       directory: this.state.directory,
       lastSuccess: this.state.lastSuccess,
       lastError: this.state.lastError,
-      pending: !!this.timer
+      pending: !!this.timer,
+      encrypted: !!this.protection
     }
   }
   private persist() {
@@ -95,46 +119,44 @@ export class BackupService {
       return this.status()
     })
   }
-  private async write(kind: BackupEntry['kind']): Promise<string> {
+  private async write(
+    kind: BackupEntry['kind'],
+    credential = this.protection?.credential
+  ): Promise<string> {
     const revision = this.repo.revision()
     const now = this.now(),
       day = localDate(now)
-    const id = kind === 'daily' ? `daily-${day}.json` : `${kind}-${day}-${randomUUID()}.json`
+    const extension = credential ? 'xudingbackup' : 'json'
+    const id =
+      kind === 'daily' ? `daily-${day}.${extension}` : `${kind}-${day}-${randomUUID()}.${extension}`
     const destination = join(this.state.directory, id)
-    const temporary = destination + `.${randomUUID()}.tmp`
+    this.log('backup.started')
     try {
       await mkdir(this.state.directory, { recursive: true })
-      const data = JSON.stringify(
+      const password = credential ? await this.vault?.read(credential) : undefined
+      if (credential && !password) throw new Error('本机备份凭据不可用，请重新设置备份密码。')
+      const data = await encodeBackup(
         backupSchema.parse({ ...this.repo.export(), exportedAt: now.toISOString() }),
-        null,
-        2
+        password
       )
-      if (Buffer.byteLength(data) > MAX_BYTES)
-        throw new Error('账本超过 50 MB，请减少图标大小后重试。')
-      const handle = await open(temporary, 'wx', 0o600)
-      try {
-        await handle.writeFile(data, 'utf8')
-        await handle.sync()
-      } finally {
-        await handle.close()
-      }
-      await rename(temporary, destination)
+      if (password) await decodeBackup(parseBackupFile(data), password)
+      await atomicWrite(destination, data)
       this.state = {
         ...this.state,
         lastSuccess: now.toISOString(),
         lastError: null,
-        ...(kind !== 'before-restore' ? { revision, day } : {})
+        ...(!kind.startsWith('before-') ? { revision, day } : {})
       }
       this.persist()
       await this.cleanup()
+      this.log('backup.saved')
       return id
     } catch (error) {
+      this.log('backup.failed', error)
       this.state.lastError =
         error instanceof Error ? error.message : '备份失败，请检查目录权限与剩余空间。'
       this.persist()
       throw new Error(this.state.lastError)
-    } finally {
-      await unlink(temporary).catch(() => {})
     }
   }
   private async safePath(id: string): Promise<string> {
@@ -148,7 +170,7 @@ export class BackupService {
     const ids = (await readdir(this.state.directory)).filter((id) => filename.test(id))
     const safety = await Promise.all(
       ids
-        .filter((id) => id.startsWith('before-restore-'))
+        .filter((id) => id.startsWith('before-'))
         .map(async (id) => ({ id, time: (await lstat(await this.safePath(id))).mtimeMs }))
     )
     const keepSafety = new Set(
@@ -159,9 +181,9 @@ export class BackupService {
     )
     const cutoff = addDays(localDate(this.now()), 1 - this.repo.settings().backupRetentionDays)
     for (const id of ids) {
-      const remove = id.startsWith('before-restore-')
+      const remove = id.startsWith('before-')
         ? !keepSafety.has(id)
-        : id.slice(id.indexOf('-') + 1, id.indexOf('-') + 11) < cutoff
+        : id.startsWith('daily-') && id.slice(6, 16) < cutoff
       if (remove) {
         const target = await this.safePath(id)
         await unlink(target)
@@ -178,35 +200,79 @@ export class BackupService {
     }
     const entries: BackupEntry[] = []
     for (const id of ids.filter((id) => filename.test(id))) {
+      let entry: BackupEntry | undefined
       try {
         const target = await this.safePath(id),
-          size = (await lstat(target)).size
-        if (size > MAX_BYTES) continue
-        const backup = backupSchema.parse(JSON.parse(await readFile(target, 'utf8')))
-        entries.push({
+          info = await lstat(target)
+        entry = {
           id,
-          createdAt: backup.exportedAt,
-          count: backup.subscriptions.length,
-          size,
+          createdAt: info.mtime.toISOString(),
+          count: null,
+          size: info.size,
           kind: id.startsWith('daily-')
             ? 'daily'
             : id.startsWith('manual-')
               ? 'manual'
-              : 'before-restore'
-        })
+              : id.startsWith('before-import-')
+                ? 'before-import'
+                : 'before-restore',
+          encrypted: id.endsWith('.xudingbackup'),
+          state: 'invalid'
+        }
+        if (info.size > MAX_BACKUP_FILE_BYTES) throw new Error('文件超过大小限制。')
+        const value = parseBackupFile(await readFile(target))
+        entry.encrypted = isEncryptedBackup(value)
+        if (entry.encrypted) entry.state = 'locked'
+        else {
+          const backup = await decodeBackup(value)
+          Object.assign(entry, {
+            state: 'valid',
+            createdAt: backup.exportedAt,
+            count: backup.subscriptions.length,
+            bills: backup.version !== 1 ? backup.bills.length : 0,
+            budgets: backup.version === 3 ? backup.budgets.length : 0
+          })
+        }
       } catch {
-        /* Damaged or externally replaced files are never offered for restoration. */
+        if (entry) {
+          entry.state = 'invalid'
+          entry.error = '文件损坏、格式不受支持或无法读取。'
+        }
       }
+      if (entry) entries.push(entry)
     }
     return entries.sort(
       (a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
     )
   }
-  async prepareFile(path: string, source = basename(path)): Promise<RestorePreview> {
-    const info = await stat(path)
-    if (!info.isFile()) throw new Error('请选择 JSON 备份文件。')
-    if (info.size > MAX_BYTES) throw new Error('备份文件不能超过 50 MB。')
-    const backup = backupSchema.parse(JSON.parse(await readFile(path, 'utf8')))
+  async selectFile(path: string, source = basename(path)): Promise<BackupSelection> {
+    const info = await lstat(path)
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error('请选择普通备份文件。')
+    if (info.size > MAX_BACKUP_FILE_BYTES) throw new Error('备份文件超过大小限制。')
+    const bytes = await readFile(path),
+      value = parseBackupFile(bytes),
+      token = randomUUID()
+    this.selections.clear()
+    this.selections.set(token, { bytes, source, expires: Date.now() + 10 * 60_000 })
+    return { token, source, encrypted: isEncryptedBackup(value) }
+  }
+  async unlock(token: string, password?: string): Promise<RestorePreview> {
+    const selected = this.selections.get(token)
+    if (!selected || selected.expires < Date.now())
+      throw new Error('文件选择已过期，请重新选择备份。')
+    const backup = await decodeBackup(parseBackupFile(selected.bytes), password)
+    this.selections.delete(token)
+    return this.prepare(backup, selected.source)
+  }
+  async prepareFile(
+    path: string,
+    source = basename(path),
+    password?: string
+  ): Promise<RestorePreview> {
+    const selection = await this.selectFile(path, source)
+    return this.unlock(selection.token, password)
+  }
+  private prepare(backup: Backup, source: string): RestorePreview {
     const current = new Set(this.repo.list().map((s) => s.id))
     const overwritten = backup.subscriptions.filter((s) => current.has(s.id)).length
     const token = randomUUID()
@@ -235,7 +301,56 @@ export class BackupService {
     return this.prepareFile(await this.safePath(id))
   }
   beforeImport(): Promise<string> {
-    return this.serialize(() => this.write('before-restore'))
+    return this.serialize(() => this.write('before-import'))
+  }
+  async select(id: string): Promise<BackupSelection> {
+    return this.selectFile(await this.safePath(id))
+  }
+  async protectionStatus(): Promise<ProtectionStatus> {
+    if (!this.protection) return { enabled: false, credentialAvailable: !!this.vault }
+    try {
+      await this.vault?.read(this.protection.credential)
+      return { enabled: true, credentialAvailable: !!this.vault }
+    } catch {
+      return { enabled: true, credentialAvailable: false }
+    }
+  }
+  configure(raw: BackupProtection): Promise<ProtectionStatus> {
+    return this.serialize(async () => {
+      const input = backupProtectionSchema.parse(raw),
+        previous = this.protection
+      if (input.enabled) {
+        if (!this.vault) throw new Error('系统凭据保护不可用，无法启用自动加密备份。')
+        const credential = await this.vault.create(input.password)
+        try {
+          await this.write('manual', credential)
+        } catch (error) {
+          await this.vault.remove(credential)
+          throw error
+        }
+        this.protection = { credential }
+      } else this.protection = null
+      this.repo.saveMetadata('backup-protection', this.protection)
+      if (previous && previous.credential !== this.protection?.credential)
+        await this.vault?.remove(previous.credential)
+      this.state.revision = -1
+      this.persist()
+      this.changed()
+      return this.protectionStatus()
+    })
+  }
+  async export(options: ExportBackupOptions): Promise<Buffer> {
+    return encodeBackup(this.repo.export(), options.encrypted ? options.password : undefined)
+  }
+  remove(id: string): Promise<void> {
+    return this.serialize(async () => {
+      await unlink(await this.safePath(id))
+    })
+  }
+  async bytes(id: string): Promise<Buffer> {
+    const path = await this.safePath(id)
+    if ((await lstat(path)).size > MAX_BACKUP_FILE_BYTES) throw new Error('文件超过大小限制。')
+    return readFile(path)
   }
   restore(token: string, mode: 'merge' | 'replace' = 'merge'): Promise<number> {
     return this.serialize(async () => {
@@ -248,6 +363,7 @@ export class BackupService {
       if (preview.revision !== this.repo.revision())
         throw new Error('账本已发生变化，请重新预览后恢复。')
       const count = this.repo.import(preview.backup, mode === 'replace')
+      this.log('backup.restored')
       this.previews.delete(token)
       this.changed()
       return count

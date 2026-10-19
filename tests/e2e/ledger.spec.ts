@@ -122,6 +122,7 @@ test('records payments, prices, calendar states and restores complete billing hi
       style: '.toast {visibility:hidden}'
     })
     await go('设置与备份')
+    await page.getByRole('tab', { name: '数据与备份', exact: true }).click()
     await page.getByRole('button', { name: '立即备份', exact: true }).click()
     const state = await page.evaluate(() => window.desktop.load())
     if (!state.ok) throw new Error(state.error)

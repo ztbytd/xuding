@@ -1,0 +1,59 @@
+name: Publish Windows release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    environment: release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Check tag and version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if ($env:GITHUB_REF -ne "refs/tags/v$version") { throw 'Release must run from its matching version tag' }
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:e2e
+      - run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - run: node scripts/release.mjs
+        env:
+          XUDING_UPDATE_PRIVATE_KEY: ${{ secrets.XUDING_UPDATE_PRIVATE_KEY }}
+      - name: Create release draft and upload complete assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'A release already exists for this tag; inspect it before retrying' }
+          gh release create $tag --draft --title "续订 $tag" --notes-file docs/release-notes.md release/*-setup.exe release/latest.yml release/xuding-update.json
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create complete draft' }
+      - name: Publish verified draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $assets = gh release view $tag --json assets | ConvertFrom-Json
+          if ($assets.assets.Count -ne 3) { throw 'Release assets incomplete; draft kept for inspection' }
+          gh release download $tag --dir release-verify
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download draft assets for verification' }
+          node scripts/verify-release.mjs release-verify
+          if ($LASTEXITCODE -ne 0) { throw 'Published artifacts failed verification; draft retained' }
+          gh release edit $tag --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish release' }

@@ -32,19 +32,19 @@ export class SubscriptionRepository {
     private now = () => new Date()
   ) {
     this.db = new DatabaseSync(path)
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
-    const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })
-      .user_version
-    if (version > 4) {
-      this.db.close()
-      throw new Error('数据库由较新版本创建，请升级续订后再打开。')
-    }
-    if (version > 0 && version < 4 && path !== ':memory:') {
-      const snapshot = path + '.pre-v4-' + Date.now() + '.db'
-      this.db.exec("VACUUM INTO '" + snapshot.replaceAll("'", "''") + "'")
-    }
-    if (version === 0)
-      this.db.exec(`
+    try {
+      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
+      const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })
+        .user_version
+      if (version > 4) {
+        throw new Error('数据库由较新版本创建，请升级续订后再打开。')
+      }
+      if (version > 0 && version < 4 && path !== ':memory:') {
+        const snapshot = path + '.pre-v4-' + Date.now() + '.db'
+        this.db.exec("VACUUM INTO '" + snapshot.replaceAll("'", "''") + "'")
+      }
+      if (version === 0)
+        this.db.exec(`
       BEGIN IMMEDIATE;
       CREATE TABLE subscriptions (id TEXT PRIMARY KEY, document TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE subscription_changes (id INTEGER PRIMARY KEY, subscription_id TEXT NOT NULL, document TEXT NOT NULL, changed_at TEXT NOT NULL);
@@ -53,10 +53,10 @@ export class SubscriptionRepository {
       PRAGMA user_version=2;
       COMMIT;
     `)
-    this.ledger = new LedgerStore(this.db, () => this.rawList(), this.now)
-    if (version < 3)
-      this.transaction(() => {
-        this.db.exec(`
+      this.ledger = new LedgerStore(this.db, () => this.rawList(), this.now)
+      if (version < 3)
+        this.transaction(() => {
+          this.db.exec(`
         CREATE TABLE bills(id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES subscriptions(id), due TEXT NOT NULL, manual INTEGER NOT NULL, document TEXT NOT NULL);
         CREATE UNIQUE INDEX scheduled_bill ON bills(subscription_id,due) WHERE manual=0;
         CREATE TABLE prices(id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES subscriptions(id), effective_on TEXT NOT NULL, document TEXT NOT NULL, UNIQUE(subscription_id,effective_on));
@@ -64,17 +64,21 @@ export class SubscriptionRepository {
         CREATE TABLE billing_tracking(subscription_id TEXT PRIMARY KEY REFERENCES subscriptions(id), document TEXT NOT NULL);
         CREATE TABLE ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT);
       `)
-        for (const item of this.rawList()) this.ledger.ensure(item)
-        this.db.exec('PRAGMA user_version=3')
-      })
-    this.finance = new FinanceStore(this.db, this.now)
-    if (version < 4)
-      this.transaction(() => {
-        this.db.exec(`CREATE TABLE budgets(month TEXT PRIMARY KEY, document TEXT NOT NULL);
+          for (const item of this.rawList()) this.ledger.ensure(item)
+          this.db.exec('PRAGMA user_version=3')
+        })
+      this.finance = new FinanceStore(this.db, this.now)
+      if (version < 4)
+        this.transaction(() => {
+          this.db.exec(`CREATE TABLE budgets(month TEXT PRIMARY KEY, document TEXT NOT NULL);
         CREATE TABLE budget_reminders(key TEXT PRIMARY KEY,sent_at TEXT NOT NULL);
         CREATE TABLE import_batches(id TEXT PRIMARY KEY,document TEXT NOT NULL,created_at TEXT NOT NULL);
         PRAGMA user_version=4;`)
-      })
+        })
+    } catch (error) {
+      this.db.close()
+      throw error
+    }
   }
   list(): Subscription[] {
     const prices = this.ledger.prices()

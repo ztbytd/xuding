@@ -1,6 +1,6 @@
 {
   "name": "xuding",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "续订 — 本地优先的开源桌面订阅管理器",
   "main": "out/main/index.js",
   "author": "ztbytd",
@@ -25,6 +25,7 @@
   "dependencies": {
     "antd": "6.6.6",
     "dayjs": "1.11.23",
+    "electron-updater": "6.8.9",
     "lucide-react": "1.59.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",

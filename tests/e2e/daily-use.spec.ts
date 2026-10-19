@@ -50,6 +50,7 @@ test('background reminders, entitlement dates and guarded backup recovery', asyn
       animations: 'disabled'
     })
     await go('设置与备份')
+    await page.getByRole('tab', { name: '数据与备份', exact: true }).click()
     await expect(page.getByRole('switch', { name: '自动备份', exact: true })).toBeChecked()
     await expect
       .poll(async () => {

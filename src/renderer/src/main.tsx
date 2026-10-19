@@ -1,13 +1,13 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import { App } from './App'
+import { Startup } from './Startup'
 import { ControlsProvider } from './controls'
 import './styles.css'
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ControlsProvider>
-      <App />
+      <Startup />
     </ControlsProvider>
   </React.StrictMode>
 )
