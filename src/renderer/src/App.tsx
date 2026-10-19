@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
+import { Switch } from 'antd'
 import {
   Archive,
   ArrowLeft,
@@ -13,8 +14,6 @@ import {
   ExternalLink,
   Layers,
   LayoutDashboard,
-  PanelLeftClose,
-  PanelLeftOpen,
   Pencil,
   Plus,
   Repeat2,
@@ -48,6 +47,7 @@ import {
   totals
 } from '../../shared/billing'
 import { useSidebar } from './useSidebar'
+import { HelpTip, SelectField } from './controls'
 
 type MainPage = 'overview' | 'list' | 'calendar' | 'settings'
 type Route =
@@ -79,11 +79,13 @@ function unwrap<T>(result: Result<T>): T {
 }
 function Panel({
   title,
+  help,
   extra,
   children,
   className = ''
 }: {
   title: string
+  help?: string
   extra?: ReactNode
   children: ReactNode
   className?: string
@@ -91,7 +93,10 @@ function Panel({
   return (
     <section className={`panel ${className}`}>
       <div className="panel-head">
-        <h2>{title}</h2>
+        <div className="panel-title">
+          <h2>{title}</h2>
+          {help && <HelpTip label={title}>{help}</HelpTip>}
+        </div>
         {extra}
       </div>
       {children}
@@ -218,17 +223,12 @@ export function App() {
   const currencyPicker = (
     <label className="currency-picker">
       <span>统计币种</span>
-      <select
-        aria-label="统计币种"
+      <SelectField
+        label="统计币种"
         value={currency}
-        onChange={(e) => setCurrency(e.target.value as Currency)}
-      >
-        {currencies.map((c) => (
-          <option key={c} value={c}>
-            {currencyNames[c]}
-          </option>
-        ))}
-      </select>
+        onChange={(value) => setCurrency(value as Currency)}
+        options={currencies.map((c) => ({ value: c, label: currencyNames[c] }))}
+      />
     </label>
   )
 
@@ -382,21 +382,22 @@ export function App() {
               onChange={(e) => setQuery(e.target.value)}
             />
           </label>
-          <select
-            aria-label="分类筛选"
+          <SelectField
+            label="分类筛选"
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          >
-            <option>全部分类</option>
-            {categories.map((c) => (
-              <option key={c}>{c}</option>
-            ))}
-          </select>
-          <select aria-label="状态筛选" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="current">当前订阅</option>
-            <option value="archived">已归档</option>
-            <option value="all">全部状态</option>
-          </select>
+            onChange={setCategory}
+            options={['全部分类', ...categories].map((c) => ({ value: c, label: c }))}
+          />
+          <SelectField
+            label="状态筛选"
+            value={status}
+            onChange={setStatus}
+            options={[
+              { value: 'current', label: '当前订阅' },
+              { value: 'archived', label: '已归档' },
+              { value: 'all', label: '全部状态' }
+            ]}
+          />
         </div>
         <div className="subscription-list">
           {visible.map((s) => {
@@ -713,19 +714,20 @@ export function App() {
           </div>
           <ShieldCheck className="muted" size={28} />
         </header>
-        <Panel title="桌面提醒">
-          <label className="setting-row">
+        <Panel
+          title="桌面提醒"
+          help="关闭应用或电脑休眠期间不会发送通知。系统关闭通知时也可能收不到提醒。"
+        >
+          <div className="setting-row">
             <span>
               <strong>到期通知</strong>
               <small>应用运行时，按每项订阅的提前天数发送系统通知，每期最多一次。</small>
             </span>
-            <input
-              type="checkbox"
+            <Switch
               aria-label="开启桌面通知"
               checked={snapshot?.settings.notificationsEnabled || false}
               disabled={busy}
-              onChange={(e) => {
-                const enabled = e.target.checked
+              onChange={(enabled) => {
                 void perform(async () => {
                   unwrap(await window.desktop.settings({ notificationsEnabled: enabled }))
                   await reload()
@@ -733,12 +735,13 @@ export function App() {
                 })
               }}
             />
-          </label>
-          <p className="footnote">
-            关闭应用或电脑休眠期间不会发送通知。系统关闭通知时也可能收不到提醒。
-          </p>
+          </div>
         </Panel>
-        <Panel title="数据备份" className="spaced">
+        <Panel
+          title="数据备份"
+          className="spaced"
+          help="本地数据库与备份均未加密，建议将备份保存在可信位置。"
+        >
           <div className="setting-row">
             <span>
               <strong>导出订阅</strong>
@@ -779,7 +782,6 @@ export function App() {
               导入备份
             </button>
           </div>
-          <p className="footnote">本地数据库与备份均未加密，建议将备份保存在可信位置。</p>
         </Panel>
         <Panel title="关于续订" className="spaced">
           <p className="notes">一个本地优先的开源订阅账本。支持离线使用，无需账号。</p>
@@ -804,8 +806,9 @@ export function App() {
 
   return (
     <>
-      <header className="window-titlebar">
-        <div className="titlebar-safe-area">
+      <header className="window-titlebar" aria-hidden="true" />
+      <div className={`app-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
+        <aside className="sidebar">
           <button
             className="sidebar-toggle"
             onClick={toggle}
@@ -816,15 +819,11 @@ export function App() {
             title={`${collapsed ? '展开' : '收起'}侧栏 (Ctrl+B)`}
           >
             {collapsed ? (
-              <PanelLeftOpen size={18} aria-hidden="true" />
+              <ChevronRight size={16} aria-hidden="true" />
             ) : (
-              <PanelLeftClose size={18} aria-hidden="true" />
+              <ChevronLeft size={16} aria-hidden="true" />
             )}
           </button>
-        </div>
-      </header>
-      <div className={`app-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
-        <aside className="sidebar">
           <div className="brand">
             <span className="brand-mark" aria-hidden="true">
               <Repeat2 size={22} />
@@ -856,7 +855,6 @@ export function App() {
           </div>
         </aside>
         <main className="main">
-          <div className="eyebrow">SUBSCRIPTIONS, SIMPLIFIED</div>
           {error && (
             <div role="alert" className="error-banner">
               <span>{error}</span>
@@ -945,6 +943,7 @@ function SubscriptionForm({
   onSave: (input: SubscriptionInput) => void
 }) {
   const [error, setError] = useState('')
+  const [autoRenew, setAutoRenew] = useState(s?.autoRenew ?? true)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const values = new FormData(event.currentTarget)
@@ -1017,20 +1016,26 @@ function SubscriptionForm({
             </label>
             <label>
               币种
-              <select name="currency" defaultValue={s?.currency || 'CNY'}>
-                {currencies.map((c) => (
-                  <option key={c} value={c}>
-                    {currencyNames[c]}
-                  </option>
-                ))}
-              </select>
+              <SelectField
+                label="币种"
+                name="currency"
+                defaultValue={s?.currency || 'CNY'}
+                disabled={busy}
+                options={currencies.map((c) => ({ value: c, label: currencyNames[c] }))}
+              />
             </label>
             <label>
               周期单位
-              <select name="cycle" defaultValue={s?.cycle || 'month'}>
-                <option value="month">月</option>
-                <option value="year">年</option>
-              </select>
+              <SelectField
+                label="周期单位"
+                name="cycle"
+                defaultValue={s?.cycle || 'month'}
+                disabled={busy}
+                options={[
+                  { value: 'month', label: '月' },
+                  { value: 'year', label: '年' }
+                ]}
+              />
             </label>
             <label>
               每隔多少个周期
@@ -1057,30 +1062,40 @@ function SubscriptionForm({
             </label>
             <label>
               分类
-              <select name="category" defaultValue={s?.category || '效率工具'}>
-                {categories.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
+              <SelectField
+                label="分类"
+                name="category"
+                defaultValue={s?.category || '效率工具'}
+                disabled={busy}
+                options={categories.map((c) => ({ value: c, label: c }))}
+              />
             </label>
             <label>
               订阅阶段
-              <select name="status" defaultValue={s?.status || 'active'}>
-                <option value="active">付费订阅</option>
-                <option value="trial">免费试用</option>
-                <option value="archived">已归档</option>
-              </select>
+              <SelectField
+                label="订阅阶段"
+                name="status"
+                defaultValue={s?.status || 'active'}
+                disabled={busy}
+                options={[
+                  { value: 'active', label: '付费订阅' },
+                  { value: 'trial', label: '免费试用' },
+                  { value: 'archived', label: '已归档' }
+                ]}
+              />
             </label>
             <label>
               提醒时间
-              <select name="reminderDays" defaultValue={s?.reminderDays ?? 3}>
-                <option value={0}>扣款当天</option>
-                {[1, 3, 7, 14].map((n) => (
-                  <option key={n} value={n}>
-                    提前 {n} 天
-                  </option>
-                ))}
-              </select>
+              <SelectField
+                label="提醒时间"
+                name="reminderDays"
+                defaultValue={String(s?.reminderDays ?? 3)}
+                disabled={busy}
+                options={[
+                  { value: '0', label: '扣款当天' },
+                  ...[1, 3, 7, 14].map((n) => ({ value: String(n), label: `提前 ${n} 天` }))
+                ]}
+              />
             </label>
             <label className="full">
               服务商网址（可选）
@@ -1104,7 +1119,13 @@ function SubscriptionForm({
             </label>
           </div>
           <label className="check-row">
-            <input name="autoRenew" type="checkbox" defaultChecked={s?.autoRenew ?? true} />
+            <Switch
+              aria-label="自动续费已开启"
+              checked={autoRenew}
+              onChange={setAutoRenew}
+              disabled={busy}
+            />
+            {autoRenew && <input name="autoRenew" type="hidden" value="on" />}
             自动续费已开启
           </label>
           <p className="footnote">

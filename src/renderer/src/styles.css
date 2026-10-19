@@ -94,26 +94,27 @@ small {
   -webkit-app-region: drag;
   user-select: none;
 }
-.titlebar-safe-area {
-  margin-left: env(titlebar-area-x, 0px);
-  width: env(titlebar-area-width, calc(100% - 140px));
-  height: 100%;
-  display: flex;
-  align-items: center;
-  padding-left: 18px;
-}
 .sidebar-toggle {
-  -webkit-app-region: no-drag;
-  width: 32px;
-  height: 30px;
+  position: absolute;
+  z-index: 10;
+  right: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 40px;
+  padding: 0;
   display: grid;
   place-items: center;
-  border-radius: 6px;
-  color: #536358;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 2px 6px #182c2010;
+  color: var(--muted);
 }
 .sidebar-toggle:hover {
-  background: #e5eae4;
-  color: #243229;
+  background: var(--soft);
+  color: var(--brand);
+  border-color: var(--brand);
 }
 .app-shell {
   --sidebar-width: 205px;
@@ -134,7 +135,7 @@ small {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 .brand {
   display: flex;
@@ -246,12 +247,6 @@ small {
   max-width: 1350px;
   margin: 0 auto;
 }
-.eyebrow {
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: var(--muted);
-  margin-bottom: 28px;
-}
 .page-head {
   display: flex;
   align-items: center;
@@ -320,8 +315,7 @@ small {
 .back:hover {
   color: var(--brand);
 }
-input,
-select,
+input:not([role='combobox']),
 textarea {
   border: 1px solid var(--line);
   background: var(--panel);
@@ -354,10 +348,8 @@ textarea::placeholder {
   font-size: 11px;
   color: var(--muted);
 }
-.currency-picker select {
-  padding: 7px 10px;
-  font-size: 12px;
-  min-width: 125px;
+.currency-picker .app-select {
+  min-width: 140px;
 }
 .stats {
   display: grid;
@@ -558,8 +550,10 @@ textarea::placeholder {
   gap: 11px;
   margin-bottom: 21px;
 }
-.list-tools select {
+.list-tools .app-select {
   font-size: 12px;
+  width: 140px;
+  flex-shrink: 0;
 }
 .search-field {
   flex: 1;
@@ -729,8 +723,8 @@ textarea::placeholder {
 .form-grid .full {
   grid-column: 1/-1;
 }
-.form-grid input,
-.form-grid select,
+.form-grid input:not([role='combobox']),
+.form-grid .app-select,
 .form-grid textarea {
   width: 100%;
   font-size: 14px;
@@ -859,6 +853,32 @@ textarea::placeholder {
   color: var(--muted);
   font-size: 12px;
   margin-top: 5px;
+}
+.app-select {
+  min-width: 0;
+}
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.help-tip {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--muted);
+}
+.help-tip:hover,
+.help-tip:focus-visible {
+  color: var(--brand);
+  background: var(--soft);
+}
+.setting-row .ant-switch,
+.check-row .ant-switch {
+  flex-shrink: 0;
 }
 @media (min-width: 1400px) {
   .main {
