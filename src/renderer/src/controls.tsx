@@ -2,7 +2,11 @@ import { useEffect, useId, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ConfigProvider, Select, Tooltip, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import { CircleHelp } from 'lucide-react'
+import { ChevronDown, CircleHelp } from 'lucide-react'
+import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
+
+dayjs.locale('zh-cn')
 
 function useMedia(query: string) {
   const [matches, setMatches] = useState(() => matchMedia(query).matches)
@@ -26,6 +30,8 @@ export function ControlsProvider({ children }: { children: ReactNode }) {
         algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
           colorPrimary: dark ? '#9cd3af' : '#286347',
+          colorLink: dark ? '#9cd3af' : '#286347',
+          colorLinkHover: dark ? '#b0e2c1' : '#205339',
           colorBgContainer: dark ? '#1e2721' : '#ffffff',
           colorBgElevated: dark ? '#253128' : '#ffffff',
           colorText: dark ? '#e7eee8' : '#243229',
@@ -74,6 +80,7 @@ export function SelectField({
   disabled?: boolean
 }) {
   const id = useId()
+  const [open, setOpen] = useState(false)
   const [localValue, setLocalValue] = useState(defaultValue ?? options[0]?.value)
   const selected = value ?? localValue
   return (
@@ -86,6 +93,15 @@ export function SelectField({
         options={options}
         disabled={disabled}
         virtual={false}
+        open={open}
+        onOpenChange={setOpen}
+        suffixIcon={
+          <ChevronDown
+            size={16}
+            aria-hidden="true"
+            className={`select-chevron${open ? ' is-open' : ''}`}
+          />
+        }
         onChange={(next) => {
           setLocalValue(next)
           onChange?.(next)

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import { Switch } from 'antd'
+import { Button, DatePicker, Input, InputNumber, Switch } from 'antd'
+import dayjs from 'dayjs'
 import {
   Archive,
   ArrowLeft,
@@ -373,15 +374,14 @@ export function App() {
           {addButton}
         </header>
         <div className="list-tools">
-          <label className="search-field">
-            <Search size={17} />
-            <input
-              aria-label="搜索订阅"
-              placeholder="搜索订阅名称…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
+          <Input
+            className="search-field"
+            prefix={<Search size={17} aria-hidden="true" />}
+            aria-label="搜索订阅"
+            placeholder="搜索订阅名称…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
           <SelectField
             label="分类筛选"
             value={category}
@@ -993,8 +993,9 @@ function SubscriptionForm({
           <div className="form-grid">
             <label className="full">
               订阅名称
-              <input
+              <Input
                 name="name"
+                disabled={busy}
                 required
                 maxLength={80}
                 placeholder="例如：音乐会员"
@@ -1004,11 +1005,18 @@ function SubscriptionForm({
             </label>
             <label>
               金额
-              <input
+              <InputNumber<string>
                 name="amount"
+                aria-label="金额"
+                disabled={busy}
                 inputMode="decimal"
+                stringMode
+                controls={false}
+                changeOnBlur={false}
+                min="0"
+                max="9999999.99"
+                step="0.01"
                 required
-                pattern="[0-9]{1,7}(\.[0-9]{1,2})?"
                 title="请输入最多两位小数的非负金额"
                 placeholder="0.00"
                 defaultValue={s ? (s.amountMinor / 100).toFixed(2) : ''}
@@ -1039,9 +1047,12 @@ function SubscriptionForm({
             </label>
             <label>
               每隔多少个周期
-              <input
+              <InputNumber
                 name="interval"
-                type="number"
+                aria-label="每隔多少个周期"
+                disabled={busy}
+                inputMode="numeric"
+                changeOnBlur={false}
                 min={1}
                 max={12}
                 step={1}
@@ -1051,13 +1062,23 @@ function SubscriptionForm({
             </label>
             <label>
               计费基准日 / 首次扣款日
-              <input
+              <DatePicker
                 name="anchorDate"
-                type="date"
-                min="1970-01-01"
-                max="2100-12-31"
+                aria-label="计费基准日 / 首次扣款日"
+                disabled={busy}
+                format="YYYY-MM-DD"
+                minDate={dayjs('1970-01-01')}
+                maxDate={dayjs('2100-12-31')}
+                preserveInvalidOnBlur
+                // Hover previews can replace an invalid draft with the previous date on blur.
+                previewValue={false}
+                onKeyDown={(event) => {
+                  // Enter confirms the date without submitting the subscription form.
+                  if (event.key === 'Enter') event.preventDefault()
+                }}
+                suffixIcon={<CalendarDays size={16} aria-hidden="true" />}
                 required
-                defaultValue={s?.anchorDate || localDate()}
+                defaultValue={dayjs(s?.anchorDate || localDate())}
               />
             </label>
             <label>
@@ -1099,8 +1120,9 @@ function SubscriptionForm({
             </label>
             <label className="full">
               服务商网址（可选）
-              <input
+              <Input
                 name="website"
+                disabled={busy}
                 type="url"
                 maxLength={2048}
                 placeholder="https://"
@@ -1109,8 +1131,9 @@ function SubscriptionForm({
             </label>
             <label className="full">
               备注（可选）
-              <textarea
+              <Input.TextArea
                 name="notes"
+                disabled={busy}
                 maxLength={2000}
                 rows={3}
                 placeholder="套餐内容、使用频率，或取消续费的位置…"
@@ -1137,12 +1160,12 @@ function SubscriptionForm({
             </div>
           )}
           <div className="form-actions">
-            <button type="button" className="secondary" onClick={onCancel}>
+            <Button disabled={busy} onClick={onCancel}>
               {s ? '取消编辑' : '取消'}
-            </button>
-            <button type="submit" className="primary">
+            </Button>
+            <Button htmlType="submit" type="primary" loading={busy}>
               {busy ? '正在保存…' : s ? '保存修改' : '添加订阅'}
-            </button>
+            </Button>
           </div>
         </fieldset>
       </form>
