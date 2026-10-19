@@ -22,6 +22,7 @@ const input = {
   website: '',
   notes: 'PRIVATE-NOTE-SECRET'
 }
+const clock = () => new Date('2026-10-20T04:00:00Z')
 const options = securityOptionsSchema.parse({}),
   password = '本机加密测试密码 2026'
 describe('encrypted local ledgers', () => {
@@ -40,7 +41,7 @@ describe('encrypted local ledgers', () => {
   it('migrates, encrypts WAL and checkpoints, locks/restarts and recovers independently', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'xuding-vault-test-')),
       file = join(dir, 'xuding.db')
-    let repo = new SubscriptionRepository(file)
+    let repo = new SubscriptionRepository(file, clock)
     const s = repo.save(input)
     repo.checkpoint()
     repo.close()
@@ -51,8 +52,8 @@ describe('encrypted local ledgers', () => {
     await vault.enable(prepared.recoveryKey!.slice(-8))
     expect(vault.status()).toMatchObject({ enabled: true, locked: false })
     expect((await readFile(file)).includes(Buffer.from(input.name))).toBe(false)
-    expect(() => new SubscriptionRepository(file)).toThrow()
-    repo = new SubscriptionRepository(file, () => new Date(), vault.key)
+    expect(() => new SubscriptionRepository(file, clock)).toThrow()
+    repo = new SubscriptionRepository(file, clock, vault.key)
     repo.decisions.record(s.id, '2026-10-20')
     const files = await readdir(dir)
     for (const name of files.filter((n) => n === 'xuding.db' || n === 'xuding.db-wal'))
@@ -69,7 +70,7 @@ describe('encrypted local ledgers', () => {
     expect(restarted.locked).toBe(true)
     await expect(restarted.unlock('incorrect password')).rejects.toThrow()
     await restarted.unlock(prepared.recoveryKey!, true)
-    repo = new SubscriptionRepository(file, () => new Date(), restarted.key)
+    repo = new SubscriptionRepository(file, clock, restarted.key)
     expect(repo.list()[0].name).toBe(input.name)
     expect(repo.decisions.usage()).toHaveLength(1)
     repo.close()
@@ -85,7 +86,7 @@ describe('encrypted local ledgers', () => {
   it('refuses an unsafe migration destination without touching the live ledger', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'xuding-vault-interruption-')),
       file = join(dir, 'xuding.db')
-    const repo = new SubscriptionRepository(file)
+    const repo = new SubscriptionRepository(file, clock)
     repo.save(input)
     repo.close()
     const vault = new LocalVault(dir),
@@ -101,7 +102,7 @@ describe('encrypted local ledgers', () => {
   it('resumes an interrupted copy and retains access to older encrypted checkpoints after rekey', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'xuding-vault-resume-')),
       file = join(dir, 'xuding.db')
-    const repo = new SubscriptionRepository(file)
+    const repo = new SubscriptionRepository(file, clock)
     repo.save(input)
     repo.close()
     const vault = new LocalVault(dir),
@@ -125,7 +126,7 @@ describe('encrypted local ledgers', () => {
     expect(recovered.key!.equals(oldKey)).toBe(false)
     expect((await service.entries()).find((v) => v.id === point)?.valid).toBe(true)
     await service.restore(point)
-    const check = new SubscriptionRepository(file, () => new Date(), recovered.key)
+    const check = new SubscriptionRepository(file, clock, recovered.key)
     expect(check.list()[0].name).toBe(input.name)
     check.close()
     oldKey.fill(0)
