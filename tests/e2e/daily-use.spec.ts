@@ -8,8 +8,22 @@ test('background reminders, entitlement dates and guarded backup recovery', asyn
   const { ELECTRON_RUN_AS_NODE: _, ...env } = process.env
   const launch = () => electron.launch({ args: ['.'], env: { ...env, XUDING_DATA_DIR: userData } })
   let app = await launch()
+  const freezeReminderClock = () =>
+    app.evaluate(() => {
+      const OriginalDate = Date
+      const instant = OriginalDate.parse('2026-10-19T04:00:00Z')
+      globalThis.Date = class extends OriginalDate {
+        constructor(value?: string | number) {
+          super(value === undefined ? instant : value)
+        }
+        static now() {
+          return instant
+        }
+      } as unknown as DateConstructor
+    })
   try {
     let page = await app.firstWindow()
+    await freezeReminderClock()
     await page.setViewportSize({ width: 1220, height: 860 })
     await page.clock.setFixedTime(new Date('2026-10-19T12:00:00+08:00'))
     const go = (name: string) =>
@@ -156,6 +170,7 @@ test('background reminders, entitlement dates and guarded backup recovery', asyn
     await page.evaluate(() => window.desktop.settings({ notificationsEnabled: false }))
     await app.close()
     app = await launch()
+    await freezeReminderClock()
     page = await app.firstWindow()
     await page.clock.setFixedTime(new Date('2026-10-19T12:00:00+08:00'))
     const restarted = await page.evaluate(() => window.desktop.load())
