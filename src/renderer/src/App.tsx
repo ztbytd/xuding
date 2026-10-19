@@ -612,95 +612,109 @@ export function App() {
           </div>
           {currencyPicker}
         </header>
-        <div className="panel">
-          <div className="calendar-head">
-            <div>
-              <button
-                className="icon-button"
-                aria-label="上个月"
-                disabled={month <= '1970-01'}
-                onClick={() => shift(-1)}
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <h2>
-                {year}年{number}月
-              </h2>
-              <button
-                className="icon-button"
-                aria-label="下个月"
-                disabled={month >= '2100-12'}
-                onClick={() => shift(1)}
-              >
-                <ChevronRight size={18} />
-              </button>
-            </div>
-            <button
-              className="secondary"
-              onClick={() => {
-                setMonth(today.slice(0, 7))
-                setSelectedDate(null)
-              }}
-            >
-              本月
-            </button>
-          </div>
-          <div className="calendar-grid">
-            {['一', '二', '三', '四', '五', '六', '日'].map((w) => (
-              <div className="weekday" key={w}>
-                {w}
-              </div>
-            ))}
-            {Array.from({ length: offset }, (_, i) => (
-              <div key={`space-${i}`} />
-            ))}
-            {Array.from({ length: days }, (_, i) => {
-              const date = `${month}-${String(i + 1).padStart(2, '0')}`,
-                items = bills.filter((b) => b.due === date)
-              return (
-                <button
-                  key={date}
-                  className={`day ${date === today ? 'today' : ''} ${items.length ? 'has-bills' : ''}`}
-                  aria-pressed={selectedDate === date}
-                  aria-label={`${date}，${items.length}笔预计扣款`}
-                  onClick={() => setSelectedDate(selectedDate === date ? null : date)}
+        <div className="calendar-view">
+          <div className="calendar-layout">
+            <section className="panel calendar-panel" aria-label="月度扣款日历">
+              <div className="calendar-head">
+                <div>
+                  <button
+                    className="icon-button"
+                    aria-label="上个月"
+                    disabled={month <= '1970-01'}
+                    onClick={() => shift(-1)}
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <h2>
+                    {year}年{number}月
+                  </h2>
+                  <button
+                    className="icon-button"
+                    aria-label="下个月"
+                    disabled={month >= '2100-12'}
+                    onClick={() => shift(1)}
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+                <Button
+                  size="small"
+                  autoInsertSpace={false}
+                  onClick={() => {
+                    setMonth(today.slice(0, 7))
+                    setSelectedDate(null)
+                  }}
                 >
-                  <span>{i + 1}</span>
-                  {items.length > 0 && (
-                    <>
-                      <strong>
-                        {formatMoney(
-                          items.reduce((n, b) => n + b.amountMinor, 0),
-                          currency
-                        )}
-                      </strong>
-                      <small>{items.length} 项订阅</small>
-                    </>
+                  本月
+                </Button>
+              </div>
+              <div className="calendar-grid">
+                {['一', '二', '三', '四', '五', '六', '日'].map((w) => (
+                  <div className="weekday" key={w}>
+                    {w}
+                  </div>
+                ))}
+                {Array.from({ length: offset }, (_, i) => (
+                  <div key={`space-${i}`} />
+                ))}
+                {Array.from({ length: days }, (_, i) => {
+                  const date = `${month}-${String(i + 1).padStart(2, '0')}`,
+                    items = bills.filter((b) => b.due === date),
+                    amount = formatMoney(
+                      items.reduce((n, b) => n + b.amountMinor, 0),
+                      currency
+                    )
+                  return (
+                    <button
+                      key={date}
+                      className={`day ${date === today ? 'today' : ''} ${items.length ? 'has-bills' : ''}`}
+                      aria-pressed={selectedDate === date}
+                      aria-current={date === today ? 'date' : undefined}
+                      aria-label={`${date}，${items.length}笔预计扣款${items.length ? `，合计${amount}` : ''}`}
+                      title={
+                        items.length ? `${items.length}笔预计扣款 · ${amount}` : '暂无预计扣款'
+                      }
+                      onClick={() => setSelectedDate(selectedDate === date ? null : date)}
+                    >
+                      <span className="day-number">
+                        {i + 1}
+                        {items.length > 0 && <i className="bill-dot" aria-hidden="true" />}
+                      </span>
+                      {items.length > 0 && <strong>{amount}</strong>}
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+            <Panel
+              className="calendar-details"
+              title={selectedDate ? `${formatDate(selectedDate)}的扣款` : '本月扣款计划'}
+              extra={
+                <span className="small muted">
+                  合计{' '}
+                  {formatMoney(
+                    shown.reduce((n, b) => n + b.amountMinor, 0),
+                    currency
                   )}
+                </span>
+              }
+            >
+              {selectedDate && (
+                <button
+                  className="text-button calendar-reset"
+                  onClick={() => setSelectedDate(null)}
+                >
+                  查看整月计划
                 </button>
-              )
-            })}
+              )}
+              {shown.length ? (
+                <BillRows bills={shown} onOpen={(id) => openDetail(id, 'calendar')} />
+              ) : (
+                <Empty>{selectedDate ? '所选日期没有预计扣款。' : '本月没有预计扣款。'}</Empty>
+              )}
+            </Panel>
           </div>
         </div>
-        <Panel
-          className="spaced"
-          title={selectedDate ? `${formatDate(selectedDate)}的扣款` : '本月扣款计划'}
-          extra={
-            <span className="small muted">
-              合计{' '}
-              {formatMoney(
-                shown.reduce((n, b) => n + b.amountMinor, 0),
-                currency
-              )}
-            </span>
-          }
-        >
-          {shown.length ? (
-            <BillRows bills={shown} onOpen={(id) => openDetail(id, 'calendar')} />
-          ) : (
-            <Empty>所选日期没有预计扣款。</Empty>
-          )}
-        </Panel>
       </>
     )
   }

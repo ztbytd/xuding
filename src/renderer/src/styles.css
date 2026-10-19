@@ -766,53 +766,88 @@ small {
   font-size: 13px;
   z-index: 10;
 }
+.calendar-view {
+  container-type: inline-size;
+}
+.calendar-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+}
+@container (min-width: 880px) {
+  .calendar-layout {
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  }
+}
+.calendar-panel {
+  padding: 16px;
+}
 .calendar-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 18px;
+  margin-bottom: 8px;
+  min-height: 32px;
 }
 .calendar-head > div {
   display: flex;
-  gap: 15px;
+  gap: 8px;
   align-items: center;
+}
+.calendar-head h2 {
+  font-size: 14px;
+}
+.calendar-head .ant-btn {
+  min-height: 32px;
+  padding-inline: 12px;
 }
 .calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 7px;
+  gap: 6px;
 }
 .weekday {
   text-align: center;
-  padding: 7px 0 11px;
+  padding: 2px 0;
   font-size: 12px;
   color: var(--muted);
 }
 .day {
-  min-height: 91px;
+  height: 58px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: 11px;
-  border-radius: 9px;
+  padding: 6px 8px;
+  border-radius: 7px;
   background: var(--bg);
   text-align: left;
   min-width: 0;
 }
-.day > span {
+.day-number {
   font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+.bill-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--brand);
+  flex-shrink: 0;
 }
 .day > strong {
-  font-size: 11px;
-  margin-top: 10px;
+  font-size: 10px;
+  margin-top: 4px;
   color: var(--brand);
   font-weight: 500;
-  overflow-wrap: anywhere;
-}
-.day > small {
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 2px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 .day.has-bills {
   background: var(--soft);
@@ -822,6 +857,36 @@ small {
 }
 .day[aria-pressed='true'] {
   box-shadow: inset 0 0 0 2px var(--brand);
+}
+.day:hover {
+  box-shadow: inset 0 0 0 1px var(--brand);
+}
+.day[aria-pressed='true']:hover {
+  box-shadow: inset 0 0 0 2px var(--brand);
+}
+.calendar-details .panel-head {
+  flex-wrap: wrap;
+  min-height: 32px;
+  gap: 4px 12px;
+  margin-bottom: 8px;
+}
+.calendar-details .panel-head > .small {
+  margin-left: auto;
+}
+.calendar-details h2 {
+  font-size: 14px;
+}
+.calendar-details .subscription-row {
+  padding: 12px 0;
+  gap: 10px;
+}
+.calendar-details .avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.calendar-reset {
+  margin-bottom: 4px;
 }
 .setting-row {
   display: flex;
@@ -909,10 +974,6 @@ small {
   .overview-columns .bar-row {
     margin: 15px 0;
   }
-  .day {
-    padding: 8px;
-    min-height: 80px;
-  }
   .subscription-list .badge {
     display: none;
   }
@@ -988,11 +1049,7 @@ small {
     gap: 4px;
   }
   .day {
-    min-height: 72px;
     padding: 6px;
-  }
-  .day > small {
-    display: none;
   }
   .day > strong {
     font-size: 10px;
@@ -1061,6 +1118,17 @@ small {
     --on-brand: #173824;
     color: var(--text);
     background: var(--bg);
+  }
+}
+/* Keep the provider tree stable when the system motion preference changes. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 @media (prefers-reduced-motion: no-preference) {

@@ -22,7 +22,6 @@ function useMedia(query: string) {
 
 export function ControlsProvider({ children }: { children: ReactNode }) {
   const dark = useMedia('(prefers-color-scheme: dark)')
-  const reducedMotion = useMedia('(prefers-reduced-motion: reduce)')
   return (
     <ConfigProvider
       locale={zhCN}
@@ -41,8 +40,7 @@ export function ControlsProvider({ children }: { children: ReactNode }) {
           fontFamily: '"Segoe UI", "Microsoft YaHei", sans-serif',
           fontSize: 13,
           borderRadius: 8,
-          controlHeight: 38,
-          motion: !reducedMotion
+          controlHeight: 38
         },
         components: {
           Select: {
