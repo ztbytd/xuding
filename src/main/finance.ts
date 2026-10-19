@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite'
+import type { DatabaseConnection } from './sqlite'
 import {
   budgetInputSchema,
   budgetSchema,
@@ -11,7 +11,7 @@ import { shiftMonth } from '../shared/analytics'
 
 export class FinanceStore {
   constructor(
-    private db: DatabaseSync,
+    private db: DatabaseConnection,
     private now = () => new Date()
   ) {}
   private changed() {

@@ -80,7 +80,8 @@ test('desktop CRUD, details, backups, and restart persistence', async () => {
     await page.getByRole('button', { name: '添加订阅', exact: true }).click()
     await expect(page.getByRole('heading', { name: '桌面测试会员', exact: true })).toBeVisible()
     await expect(page.locator('.detail-price')).toContainText('19.99')
-    await expect(page.locator('input')).toHaveCount(0)
+    await expect(page.getByRole('textbox', { name: '订阅名称', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '编辑订阅', exact: true })).toBeVisible()
     const saved = await page.evaluate(() => window.desktop.load())
     expect(saved.ok && saved.data.subscriptions[0]).toMatchObject({
       cycle: 'year',
@@ -122,7 +123,7 @@ test('desktop CRUD, details, backups, and restart persistence', async () => {
       .filter({ hasText: '退出应用或电脑休眠期间不会发送通知' })
     const backupTip = page
       .getByRole('tooltip')
-      .filter({ hasText: '本机 SQLite 数据库与升级恢复副本仍未加密' })
+      .filter({ hasText: '本机账本加密在“安全”中单独设置' })
     await reminderHelp.hover()
     await expect(reminderTip).toBeVisible()
     await page.getByRole('heading', { name: '设置与备份' }).hover()

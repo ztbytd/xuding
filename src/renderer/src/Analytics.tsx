@@ -1,3 +1,4 @@
+import { ChangeSummary } from './ChangeSummary'
 import { useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { Button, DatePicker, Input, InputNumber, Modal, Progress, Switch, Table } from 'antd'
@@ -820,6 +821,12 @@ export function AnalyticsPage({
           ]}
         />
       </AnalysisPanel>
+      <ChangeSummary
+        snapshot={snapshot}
+        currency={currency}
+        today={month === today.slice(0, 7) ? today : monthEnd(month)}
+        onOpen={onOpen}
+      />
       <AnalysisPanel title="导入记录" className="spaced">
         <div className="import-batches">
           {snapshot.importBatches.length ? (

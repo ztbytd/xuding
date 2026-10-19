@@ -73,7 +73,7 @@ describe('encrypted backups and recoverable desktop data', () => {
     const old = (await service.history())[0].id
     await service.configure({ enabled: true, password: 'another long password', remember: true })
     expect(await decodeBackup(parseBackupFile(await service.bytes(old)), password)).toMatchObject({
-      version: 3
+      version: 4
     })
     const imported = await service.beforeImport()
     expect(imported).toMatch(/^before-import-.*\.xudingbackup$/)
@@ -123,7 +123,7 @@ describe('encrypted backups and recoverable desktop data', () => {
     const recovery = new RecoveryService(directory, '0.5.0')
     await recovery.beforeOpen()
     const checkpoint = (await recovery.entries())[0]
-    expect(checkpoint).toMatchObject({ valid: true, version: 4 })
+    expect(checkpoint).toMatchObject({ valid: true, version: 5 })
     await writeFile(join(directory, 'xuding.db'), 'corrupt database')
     await writeFile(join(directory, 'xuding.db-wal'), 'failed wal')
     await expect(recovery.beforeOpen()).rejects.toThrow()

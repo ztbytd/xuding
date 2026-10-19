@@ -208,7 +208,7 @@ describe('automatic backups and guarded restoration', () => {
       }
       const check = new DatabaseSync(file)
       try {
-        expect(check.prepare('PRAGMA user_version').get()!.user_version).toBe(4)
+        expect(check.prepare('PRAGMA user_version').get()!.user_version).toBe(5)
       } finally {
         check.close()
       }

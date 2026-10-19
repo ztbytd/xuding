@@ -1,4 +1,6 @@
+import { usageSchema, decisionSchema } from './decision-model'
 import { z } from 'zod'
+import { exchangeRatesSchema } from './exchange'
 import type { ExchangeRates, ExchangeResult } from './exchange'
 
 import { currencies, dateSchema } from './primitives'
@@ -120,20 +122,55 @@ const nextBackupSchema = currentBackupSchema
     importBatches: z.array(importBatchSchema).max(10000)
   })
   .strict()
+const decisionBackupSchema = nextBackupSchema
+  .extend({
+    version: z.literal(4),
+    usage: z.array(usageSchema).max(100000),
+    decisions: z.array(decisionSchema).max(10000),
+    histories: z.array(subscriptionSchema).max(500000).default([]),
+    rateHistory: z.array(exchangeRatesSchema).max(4000).default([])
+  })
+  .strict()
 export const backupSchema = z
-  .discriminatedUnion('version', [legacyBackupSchema, currentBackupSchema, nextBackupSchema])
+  .discriminatedUnion('version', [
+    legacyBackupSchema,
+    currentBackupSchema,
+    nextBackupSchema,
+    decisionBackupSchema
+  ])
   .superRefine((value, ctx) => {
-    if (value.version === 3) {
-      if (new Set(value.budgets.map((b) => b.month)).size !== value.budgets.length)
+    if (value.version >= 3) {
+      if (
+        new Set((value as z.infer<typeof nextBackupSchema>).budgets.map((b) => b.month)).size !==
+        (value as z.infer<typeof nextBackupSchema>).budgets.length
+      )
         ctx.addIssue({ code: 'custom', message: '预算月份重复' })
-      if (new Set(value.importBatches.map((b) => b.id)).size !== value.importBatches.length)
+      if (
+        new Set((value as z.infer<typeof nextBackupSchema>).importBatches.map((b) => b.id)).size !==
+        (value as z.infer<typeof nextBackupSchema>).importBatches.length
+      )
         ctx.addIssue({ code: 'custom', message: '导入批次重复' })
-      if (new Set(value.budgetReminders.map((b) => b.key)).size !== value.budgetReminders.length)
+      if (
+        new Set((value as z.infer<typeof nextBackupSchema>).budgetReminders.map((b) => b.key))
+          .size !== (value as z.infer<typeof nextBackupSchema>).budgetReminders.length
+      )
         ctx.addIssue({ code: 'custom', message: '预算提醒重复' })
     }
     const ids = new Set(value.subscriptions.map((s) => s.id))
     const fail = (message: string) => ctx.addIssue({ code: 'custom', message })
     if (ids.size !== value.subscriptions.length) fail('备份中包含重复 ID')
+    if (value.version === 4) {
+      if (
+        new Set(value.usage.map((u) => u.subscriptionId + ':' + u.day)).size !==
+          value.usage.length ||
+        new Set(value.usage.map((u) => u.id)).size !== value.usage.length
+      )
+        fail('使用记录重复')
+      if (new Set(value.decisions.map((d) => d.subscriptionId)).size !== value.decisions.length)
+        fail('决策记录重复')
+      if ([...value.usage, ...value.decisions].some((r) => !ids.has(r.subscriptionId)))
+        fail('使用或决策记录缺少订阅')
+    }
     if (value.version === 1) return
     for (const rows of [value.bills, value.prices, value.changes]) {
       if (new Set(rows.map((r) => r.id)).size !== rows.length) fail('备份中包含重复记录')
@@ -180,7 +217,7 @@ export type BackupEntry = {
   createdAt: string
   count: number | null
   size: number
-  kind: 'daily' | 'manual' | 'before-restore' | 'before-import'
+  kind: 'daily' | 'manual' | 'before-restore' | 'before-import' | 'before-sync'
   encrypted?: boolean
   state?: 'valid' | 'locked' | 'invalid'
   error?: string
@@ -205,6 +242,10 @@ export type DesktopAction = { sequence: number } & (
   { page: 'new' } | { page: 'analysis' } | { page: 'detail'; id: string }
 )
 export type Snapshot = {
+  histories: Subscription[]
+  rateHistory: ExchangeRates[]
+  usage: import('./decision-model').Usage[]
+  decisions: import('./decision-model').Decision[]
   subscriptions: Subscription[]
   budgets: Budget[]
   importBatches: ImportBatch[]
@@ -219,6 +260,19 @@ export type Snapshot = {
 }
 
 export interface DesktopApi {
+  openLicenses(): Promise<Result<void>>
+  decisionSave(
+    input: import('./decision-model').DecisionInput
+  ): Promise<Result<import('./decision-model').Decision>>
+  usageRecord(id: string, day: string, remove?: boolean): Promise<Result<void>>
+  securityStatus(): Promise<Result<import('./vault-model').SecurityStatus>>
+  securityAction(
+    input: import('./vault-model').SecurityAction
+  ): Promise<Result<import('./vault-model').SecurityStatus>>
+  syncStatus(): Promise<Result<import('./sync-model').SyncStatus>>
+  syncAction(
+    input: import('./sync-model').SyncAction
+  ): Promise<Result<import('./sync-model').SyncStatus>>
   protectionStatus(): Promise<Result<import('./operations-model').ProtectionStatus>>
   configureProtection(
     input: import('./operations-model').BackupProtection

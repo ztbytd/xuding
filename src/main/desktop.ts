@@ -59,7 +59,7 @@ export class DesktopLifecycle {
     window.on('close', (event) => {
       if (this.quitting) return
       event.preventDefault()
-      const preference = this.repo.settings().closeBehavior
+      const preference = (this.lockedSettings ?? this.repo.settings()).closeBehavior
       if (preference === 'quit') {
         app.quit()
         return
@@ -85,7 +85,7 @@ export class DesktopLifecycle {
         .then((result) => {
           const background = !!this.tray && result.response === 0
           const exit = result.response === (this.tray ? 1 : 0)
-          if (result.checkboxChecked && (background || exit))
+          if (!this.lockedSettings && result.checkboxChecked && (background || exit))
             this.repo.saveSettings({ closeBehavior: background ? 'tray' : 'quit' })
           if (background && !window.isDestroyed()) window.hide()
           if (exit) app.quit()
@@ -100,12 +100,20 @@ export class DesktopLifecycle {
     this.quitting = true
     this.quitReady = true
   }
+  updateStorage(repo: SubscriptionRepository, backups: BackupService): void {
+    this.repo = repo
+    this.backups = backups
+  }
+  private lockedSettings: Settings | null = null
+  setLocked(settings: Settings | null): void {
+    this.lockedSettings = settings
+  }
   startHidden(): boolean {
     return (
       !!this.tray &&
       process.argv.includes('--autostart') &&
-      this.repo.settings().launchAtLogin &&
-      this.repo.settings().startInTray
+      (this.lockedSettings ?? this.repo.settings()).launchAtLogin &&
+      (this.lockedSettings ?? this.repo.settings()).startInTray
     )
   }
   updateLogin(previous: Settings, next: Settings): void {

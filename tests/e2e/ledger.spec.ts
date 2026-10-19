@@ -142,6 +142,7 @@ test('records payments, prices, calendar states and restores complete billing hi
     await page.getByRole('button', { name: `恢复 ${manual.id}`, exact: true }).click()
     await expect(dialog('恢复预览')).toContainText('2 笔账单')
     await page.getByRole('button', { name: '确认恢复', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: '恢复预览', exact: true })).toBeHidden()
     const restored = await page.evaluate(() => window.desktop.load())
     expect(restored.ok && restored.data.bills).toEqual(state.data.bills)
     await app.close()

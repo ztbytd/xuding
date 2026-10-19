@@ -168,6 +168,7 @@ test('budgets, analysis, CSV correction and creation, filtered export and comple
     await page.getByRole('button', { name: '导入 CSV', exact: true }).click()
     await page.getByRole('combobox', { name: 'CSV 导入类型', exact: true }).click()
     await page.getByRole('option', { name: '账单记录', exact: true }).click()
+    await expect(page.locator('.csv-kind > label')).toContainText('账单记录')
     await dialog('导入 CSV').getByRole('button', { name: '选择 CSV 文件', exact: true }).click()
     await page.getByRole('button', { name: '下一步：匹配字段', exact: true }).click()
     await page.getByRole('button', { name: '检查并预览', exact: true }).click()

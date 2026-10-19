@@ -31,7 +31,7 @@ const stateSchema = z.object({
   day: z.string()
 })
 const filename =
-  /^(daily-\d{4}-\d{2}-\d{2}|(manual|before-restore|before-import)-\d{4}-\d{2}-\d{2}-[a-f0-9-]{36})\.(json|xudingbackup)$/
+  /^(daily-\d{4}-\d{2}-\d{2}|(manual|before-restore|before-import|before-sync)-\d{4}-\d{2}-\d{2}-[a-f0-9-]{36})\.(json|xudingbackup)$/
 export class BackupService {
   private state: z.infer<typeof stateSchema>
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -39,6 +39,8 @@ export class BackupService {
   private previews = new Map<string, { backup: Backup; revision: number; expires: number }>()
   private selections = new Map<string, { bytes: Buffer; source: string; expires: number }>()
   private protection: { credential: string } | null = null
+  suspended = false
+  requireEncryption = false
   constructor(
     private repo: SubscriptionRepository,
     defaultDirectory: string,
@@ -73,6 +75,7 @@ export class BackupService {
     return next
   }
   changed(): void {
+    if (this.suspended) return
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
     if (!this.repo.settings().autoBackupEnabled) return
@@ -83,6 +86,10 @@ export class BackupService {
     this.timer.unref()
   }
   async flush(): Promise<void> {
+    if (this.suspended) {
+      await this.queue
+      return
+    }
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
     if (this.repo.settings().autoBackupEnabled) await this.automatic()
@@ -90,6 +97,7 @@ export class BackupService {
   }
   automatic(): Promise<void> {
     return this.serialize(async () => {
+      if (this.suspended) return
       if (!this.repo.settings().autoBackupEnabled || !this.repo.revision()) return
       if (this.state.revision === this.repo.revision() && this.state.day === localDate(this.now()))
         return
@@ -123,6 +131,9 @@ export class BackupService {
     kind: BackupEntry['kind'],
     credential = this.protection?.credential
   ): Promise<string> {
+    if (this.suspended) throw new Error('账本已锁定。')
+    if (this.requireEncryption && !credential)
+      throw new Error('加密账本需要先配置加密备份，无法改为明文保存。')
     const revision = this.repo.revision()
     const now = this.now(),
       day = localDate(now)
@@ -215,7 +226,9 @@ export class BackupService {
               ? 'manual'
               : id.startsWith('before-import-')
                 ? 'before-import'
-                : 'before-restore',
+                : id.startsWith('before-sync-')
+                  ? 'before-sync'
+                  : 'before-restore',
           encrypted: id.endsWith('.xudingbackup'),
           state: 'invalid'
         }
@@ -230,7 +243,7 @@ export class BackupService {
             createdAt: backup.exportedAt,
             count: backup.subscriptions.length,
             bills: backup.version !== 1 ? backup.bills.length : 0,
-            budgets: backup.version === 3 ? backup.budgets.length : 0
+            budgets: backup.version === 3 || backup.version === 4 ? backup.budgets.length : 0
           })
         }
       } catch {
@@ -287,8 +300,8 @@ export class BackupService {
       bills: backup.version >= 2 ? (backup as Exclude<Backup, { version: 1 }>).bills.length : 0,
       prices: backup.version >= 2 ? (backup as Exclude<Backup, { version: 1 }>).prices.length : 0,
       legacy: backup.version === 1,
-      fullRestoreSupported: backup.version === 3,
-      budgets: backup.version === 3 ? backup.budgets.length : 0,
+      fullRestoreSupported: backup.version === 3 || backup.version === 4,
+      budgets: backup.version === 3 || backup.version === 4 ? backup.budgets.length : 0,
       source,
       exportedAt: backup.exportedAt,
       count: backup.subscriptions.length,
@@ -299,6 +312,9 @@ export class BackupService {
   }
   async preview(id: string): Promise<RestorePreview> {
     return this.prepareFile(await this.safePath(id))
+  }
+  beforeSync(): Promise<string> {
+    return this.serialize(() => this.write('before-sync'))
   }
   beforeImport(): Promise<string> {
     return this.serialize(() => this.write('before-import'))
@@ -319,6 +335,8 @@ export class BackupService {
     return this.serialize(async () => {
       const input = backupProtectionSchema.parse(raw),
         previous = this.protection
+      if (this.requireEncryption && !input.enabled)
+        throw new Error('本地账本已加密，请保持新备份加密。')
       if (input.enabled) {
         if (!this.vault) throw new Error('系统凭据保护不可用，无法启用自动加密备份。')
         const credential = await this.vault.create(input.password)
@@ -351,6 +369,21 @@ export class BackupService {
     const path = await this.safePath(id)
     if ((await lstat(path)).size > MAX_BACKUP_FILE_BYTES) throw new Error('文件超过大小限制。')
     return readFile(path)
+  }
+  async suspend(): Promise<void> {
+    try {
+      await this.flush()
+    } finally {
+      if (this.timer) clearTimeout(this.timer)
+      this.timer = undefined
+      this.suspended = true
+      this.previews.clear()
+      for (const v of this.selections.values()) v.bytes.fill(0)
+      this.selections.clear()
+    }
+  }
+  async protectionPassword(): Promise<string | undefined> {
+    return this.protection ? this.vault?.read(this.protection.credential) : undefined
   }
   restore(token: string, mode: 'merge' | 'replace' = 'merge'): Promise<number> {
     return this.serialize(async () => {

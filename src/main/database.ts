@@ -1,4 +1,6 @@
-import { DatabaseSync } from 'node:sqlite'
+import { openDatabase } from './sqlite'
+import type { DatabaseConnection } from './sqlite'
+import { DecisionStore } from './decisions'
 import { FinanceStore } from './finance'
 import type { CsvOperation } from '../shared/csv-model'
 import type { ImportBatch } from '../shared/analytics-model'
@@ -24,19 +26,21 @@ import { exchangeRatesSchema } from '../shared/exchange'
 import type { ExchangeRates } from '../shared/exchange'
 
 export class SubscriptionRepository {
-  private db: DatabaseSync
+  private db: DatabaseConnection
   readonly ledger: LedgerStore
   readonly finance: FinanceStore
+  readonly decisions: DecisionStore
   constructor(
     path: string,
-    private now = () => new Date()
+    private now = () => new Date(),
+    key?: Buffer
   ) {
-    this.db = new DatabaseSync(path)
+    this.db = openDatabase(path, key)
     try {
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
       const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })
         .user_version
-      if (version > 4) {
+      if (version > 5) {
         throw new Error('数据库由较新版本创建，请升级续订后再打开。')
       }
       if (version > 0 && version < 4 && path !== ':memory:') {
@@ -75,6 +79,44 @@ export class SubscriptionRepository {
         CREATE TABLE import_batches(id TEXT PRIMARY KEY,document TEXT NOT NULL,created_at TEXT NOT NULL);
         PRAGMA user_version=4;`)
         })
+      if (version < 5)
+        this.transaction(() => {
+          this.db
+            .exec(`CREATE TABLE usage_records(id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES subscriptions(id), day TEXT NOT NULL, document TEXT NOT NULL, UNIQUE(subscription_id,day));
+          CREATE TABLE decisions(subscription_id TEXT PRIMARY KEY REFERENCES subscriptions(id),document TEXT NOT NULL);
+          CREATE TABLE sync_local(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+          CREATE TABLE sync_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          PRAGMA user_version=5;`)
+        })
+      this.decisions = new DecisionStore(
+        this.db,
+        () => this.rawList(),
+        (input, id) => this.save(input, id),
+        this.now
+      )
+      this.db.exec(
+        'CREATE INDEX IF NOT EXISTS subscription_history_owner ON subscription_changes(subscription_id)'
+      )
+      // Every business write, including ledger/CSV/restore, marks pending sync in its own transaction.
+      for (const table of [
+        'subscriptions',
+        'bills',
+        'prices',
+        'ledger_changes',
+        'billing_tracking',
+        'budgets',
+        'import_batches',
+        'usage_records',
+        'decisions'
+      ]) {
+        for (const op of ['INSERT', 'UPDATE', 'DELETE'])
+          this.db.exec(
+            `CREATE TRIGGER IF NOT EXISTS sync_${table}_${op} AFTER ${op} ON ${table} BEGIN INSERT INTO sync_outbox DEFAULT VALUES; END;`.replace(
+              'INSERT INTO sync_outbox DEFAULT VALUES',
+              'INSERT INTO sync_outbox(created_at) VALUES(CURRENT_TIMESTAMP)'
+            )
+          )
+      }
     } catch (error) {
       this.db.close()
       throw error
@@ -145,12 +187,12 @@ export class SubscriptionRepository {
       .run(item.id, JSON.stringify(item), new Date().toISOString())
   }
   private transaction(work: () => void): void {
-    this.db.exec('BEGIN IMMEDIATE')
+    this.db.exec('SAVEPOINT repository_write')
     try {
       work()
-      this.db.exec('COMMIT')
+      this.db.exec('RELEASE repository_write')
     } catch (error) {
-      this.db.exec('ROLLBACK')
+      this.db.exec('ROLLBACK TO repository_write; RELEASE repository_write')
       throw error
     }
   }
@@ -195,7 +237,11 @@ export class SubscriptionRepository {
   export(): Backup {
     return {
       format: 'xuding',
-      version: 3,
+      version: 4,
+      usage: this.decisions.usage(),
+      decisions: this.decisions.list(),
+      histories: this.history(),
+      rateHistory: this.rateHistory(),
       budgets: this.finance.budgets(),
       budgetReminders: this.finance.reminders(),
       importBatches: this.finance.batches(),
@@ -224,11 +270,13 @@ export class SubscriptionRepository {
   }
   import(raw: unknown, replace = false): number {
     const backup = backupSchema.parse(raw)
-    if (replace && backup.version !== 3) throw new Error('完整恢复需要 v0.4 导出的新版备份。')
+    const previousRevision = this.revision()
+    if (replace && backup.version < 3)
+      throw new Error('完整恢复需要 v0.4 或更新版本导出的新版备份。')
     this.transaction(() => {
       if (replace)
         this.db.exec(
-          'DELETE FROM ledger_changes;DELETE FROM bills;DELETE FROM prices;DELETE FROM billing_tracking;DELETE FROM subscriptions;'
+          'DELETE FROM usage_records;DELETE FROM decisions;DELETE FROM ledger_changes;DELETE FROM bills;DELETE FROM prices;DELETE FROM billing_tracking;DELETE FROM subscriptions;DELETE FROM subscription_changes;'
         )
       for (const item of backup.subscriptions) {
         this.upsert(item)
@@ -243,7 +291,27 @@ export class SubscriptionRepository {
           backup as Exclude<Backup, { version: 1 }>,
           backup.subscriptions.map((s) => s.id)
         )
-      if (backup.version === 3) this.finance.import(backup, replace)
+      if (backup.version >= 3)
+        this.finance.import(backup as Extract<Backup, { version: 3 | 4 }>, replace)
+      if (backup.version === 4) {
+        this.decisions.import(backup)
+        for (const item of backup.histories)
+          if (
+            !this.db
+              .prepare(
+                'SELECT 1 FROM subscription_changes WHERE subscription_id=? AND document=? LIMIT 1'
+              )
+              .get(item.id, JSON.stringify(item))
+          )
+            this.db
+              .prepare(
+                'INSERT INTO subscription_changes(subscription_id,document,changed_at) VALUES(?,?,?)'
+              )
+              .run(item.id, JSON.stringify(item), item.updatedAt)
+        this.saveMetadata('rate-history', backup.rateHistory)
+      }
+      if (this.revision() <= previousRevision)
+        this.db.prepare('INSERT INTO ledger_events(id) VALUES(?)').run(previousRevision + 1)
     })
     return backup.subscriptions.length
   }
@@ -295,5 +363,64 @@ export class SubscriptionRepository {
   }
   close(): void {
     this.db.close()
+  }
+  syncMetadata(key: string): unknown {
+    const row = this.db.prepare('SELECT value FROM sync_local WHERE key=?').get(key)
+    return row ? JSON.parse(String(row.value)) : null
+  }
+  saveSyncMetadata(key: string, value: unknown): void {
+    this.db
+      .prepare(
+        'INSERT INTO sync_local VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'
+      )
+      .run(key, JSON.stringify(value))
+  }
+  pendingSync(): number {
+    return Number(this.db.prepare('SELECT count(*) AS n FROM sync_outbox').get().n)
+  }
+  acknowledgeSync(): void {
+    this.db.exec('DELETE FROM sync_outbox')
+  }
+  atomic<T>(work: () => T): T {
+    this.db.exec('SAVEPOINT repository_atomic')
+    try {
+      const result = work()
+      this.db.exec('RELEASE repository_atomic')
+      return result
+    } catch (e) {
+      this.db.exec('ROLLBACK TO repository_atomic; RELEASE repository_atomic')
+      throw e
+    }
+  }
+  checkpoint(): void {
+    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  }
+  markPendingSync(): void {
+    this.db.prepare('INSERT INTO sync_outbox DEFAULT VALUES').run()
+  }
+  history(): Subscription[] {
+    const ids = new Set(this.rawList().map((s) => s.id)),
+      unique = new Map<string, Subscription>()
+    for (const row of this.db
+      .prepare('SELECT document FROM subscription_changes ORDER BY id')
+      .all()) {
+      const item = subscriptionSchema.parse(JSON.parse(row.document))
+      if (ids.has(item.id)) unique.set(item.id + ':' + item.updatedAt, item)
+    }
+    return [...unique.values()]
+  }
+  rateHistory(): ExchangeRates[] {
+    const value = this.metadata('rate-history')
+    return Array.isArray(value)
+      ? value.flatMap((v) => {
+          const r = exchangeRatesSchema.safeParse(v)
+          return r.success ? [r.data] : []
+        })
+      : []
+  }
+  recordRate(table: ExchangeRates): void {
+    if (this.rateHistory().some((v) => v.date === table.date)) return
+    this.saveMetadata('rate-history', [...this.rateHistory(), table].slice(-4000))
+    this.markPendingSync()
   }
 }

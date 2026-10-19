@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite'
+import type { DatabaseConnection } from './sqlite'
 import { randomUUID } from 'node:crypto'
 import { addDays, localDate, occurrences } from '../shared/billing'
 import {
@@ -25,7 +25,7 @@ import type { ExchangeRates } from '../shared/exchange'
 
 export class LedgerStore {
   constructor(
-    private db: DatabaseSync,
+    private db: DatabaseConnection,
     private subscriptions: () => Subscription[],
     private now = () => new Date()
   ) {}

@@ -3,6 +3,13 @@ import { channels } from '../shared/channels'
 import type { DesktopApi } from '../shared/model'
 
 const api: DesktopApi = {
+  openLicenses: () => ipcRenderer.invoke(channels.openLicenses),
+  decisionSave: (input) => ipcRenderer.invoke(channels.decisionSave, input),
+  usageRecord: (id, day, remove) => ipcRenderer.invoke(channels.usageRecord, id, day, remove),
+  securityStatus: () => ipcRenderer.invoke(channels.securityStatus),
+  securityAction: (input) => ipcRenderer.invoke(channels.securityAction, input),
+  syncStatus: () => ipcRenderer.invoke(channels.syncStatus),
+  syncAction: (input) => ipcRenderer.invoke(channels.syncAction, input),
   protectionStatus: () => ipcRenderer.invoke(channels.protectionStatus),
   configureProtection: (input) => ipcRenderer.invoke(channels.configureProtection, input),
   chooseImport: () => ipcRenderer.invoke(channels.chooseImport),

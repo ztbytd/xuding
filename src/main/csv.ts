@@ -50,6 +50,12 @@ export class CsvService {
   private file: { token: string; name: string; bytes: Buffer; expires: number } | null = null
   private decoded: CsvFile | null = null
   private prepared: Prepared | null = null
+  clear(): void {
+    this.file?.bytes.fill(0)
+    this.file = null
+    this.decoded = null
+    this.prepared = null
+  }
   constructor(
     private repo: SubscriptionRepository,
     private backups: BackupService,

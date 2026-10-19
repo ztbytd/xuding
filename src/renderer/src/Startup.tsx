@@ -1,3 +1,5 @@
+import { UnlockPage } from './SecuritySettings'
+import type { SecurityStatus } from '../../shared/vault-model'
 import { useEffect, useState } from 'react'
 import { Button, Tag } from 'antd'
 import { ShieldAlert } from 'lucide-react'
@@ -5,6 +7,19 @@ import type { RecoveryState } from '../../shared/operations-model'
 import { App } from './App'
 
 export function Startup() {
+  const [security, setSecurity] = useState<SecurityStatus | null>(null)
+  const refreshSecurity = () =>
+    void window.desktop
+      .securityStatus()
+      .then((r) => {
+        if (r.ok) setSecurity(r.data)
+      })
+      .catch(() => {})
+  useEffect(() => {
+    refreshSecurity()
+    const t = setInterval(refreshSecurity, 1000)
+    return () => clearInterval(t)
+  }, [])
   const [state, setState] = useState<RecoveryState | null>(null),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
@@ -29,6 +44,16 @@ export function Startup() {
       setBusy(false)
     }
   }
+  if (!security) return <div className="startup-loading">正在打开续订…</div>
+  if (security.locked)
+    return (
+      <UnlockPage
+        onUnlocked={() => {
+          refreshSecurity()
+          void window.desktop.recoveryStatus().then((r) => r.ok && setState(r.data))
+        }}
+      />
+    )
   if (state && !state.active) return <App />
   if (!state) return <div className="startup-loading">{error || '正在打开续订…'}</div>
   return (

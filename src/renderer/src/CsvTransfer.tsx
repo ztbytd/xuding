@@ -372,7 +372,6 @@ export function CsvImportWizard({
   const today = localDate(),
     [step, setStep] = useState(0),
     [file, setFile] = useState<CsvFile | null>(null),
-    [kind, setKind] = useState<CsvKind>('subscriptions'),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [preview, setPreview] = useState<CsvPreview | null>(null),
@@ -397,6 +396,7 @@ export function CsvImportWizard({
     priceEffectiveOn: today,
     decisions: []
   })
+  const kind = options.kind
   async function run(work: () => Promise<void>) {
     if (busy) return
     setBusy(true)
@@ -417,8 +417,7 @@ export function CsvImportWizard({
         setOptions((p) => ({
           ...p,
           fileToken: selected.token,
-          kind,
-          mapping: autoMapping(selected.headers, kind),
+          mapping: autoMapping(selected.headers, p.kind),
           decisions: []
         }))
         setPreview(null)
@@ -486,7 +485,6 @@ export function CsvImportWizard({
                   value={kind}
                   onChange={(v) => {
                     const next = v as CsvKind
-                    setKind(next)
                     setOptions((p) => ({
                       ...p,
                       kind: next,
@@ -559,7 +557,7 @@ export function CsvImportWizard({
                         setFile(decoded)
                         setOptions((p) => ({
                           ...p,
-                          mapping: autoMapping(decoded.headers, kind),
+                          mapping: autoMapping(decoded.headers, p.kind),
                           decisions: []
                         }))
                       })

@@ -1,6 +1,11 @@
+import { DecisionPanel } from './Decisions'
+import { CommandMenu } from './CommandMenu'
+import { ChangeSummary } from './ChangeSummary'
+import { decisionAttention, usageSummary } from '../../shared/decisions'
+import { decisionNames, frequencyNames, decisionInputSchema } from '../../shared/decision-model'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import { Button, DatePicker, Input, InputNumber, Switch } from 'antd'
+import { Button, DatePicker, Dropdown, Input, InputNumber, Switch } from 'antd'
 import dayjs from 'dayjs'
 import {
   Archive,
@@ -22,7 +27,9 @@ import {
   Search,
   Settings as SettingsIcon,
   Upload,
-  X
+  X,
+  MoreHorizontal,
+  LockKeyhole
 } from 'lucide-react'
 import { categories, currencies, subscriptionInputSchema } from '../../shared/model'
 import type {
@@ -212,6 +219,13 @@ function BillRows({
   )
 }
 
+function listPreferences(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem('xuding.list-preferences') || '{}')
+  } catch {
+    return {}
+  }
+}
 export function App() {
   const { collapsed, toggle } = useSidebar()
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
@@ -252,8 +266,54 @@ export function App() {
     }
   }, [])
   const [query, setQuery] = useState('')
-  const [category, setCategory] = useState('全部分类')
-  const [status, setStatus] = useState('current')
+  const [category, setCategory] = useState(() => listPreferences().category || '全部分类')
+  const [status, setStatus] = useState(() => listPreferences().status || 'current')
+  const [decisionFilter, setDecisionFilter] = useState(
+      () => listPreferences().decisionFilter || 'all'
+    ),
+    [frequencyFilter, setFrequencyFilter] = useState(
+      () => listPreferences().frequencyFilter || 'all'
+    ),
+    [sort, setSort] = useState(() => listPreferences().sort || 'recent')
+  const [securityEnabled, setSecurityEnabled] = useState(false),
+    [syncLabel, setSyncLabel] = useState('本地存储')
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        'xuding.list-preferences',
+        JSON.stringify({ category, status, decisionFilter, frequencyFilter, sort })
+      )
+    } catch {}
+  }, [category, status, decisionFilter, frequencyFilter, sort])
+  useEffect(() => {
+    const refresh = () => {
+      void window.desktop.securityStatus().then((r) => r.ok && setSecurityEnabled(r.data.enabled))
+      void window.desktop
+        .syncStatus()
+        .then((r) => {
+          if (r.ok)
+            setSyncLabel(
+              !r.data.connected
+                ? '本地存储'
+                : r.data.phase === 'syncing'
+                  ? '正在同步'
+                  : r.data.phase === 'conflict'
+                    ? '同步待处理'
+                    : r.data.phase === 'error'
+                      ? '同步失败'
+                      : r.data.phase === 'paused'
+                        ? '同步已暂停'
+                        : r.data.pending
+                          ? '等待同步'
+                          : '已加密同步'
+            )
+        })
+        .catch(() => {})
+    }
+    refresh()
+    const timer = setInterval(refresh, 3000)
+    return () => clearInterval(timer)
+  }, [])
   const [month, setMonth] = useState(today.slice(0, 7))
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [archiveId, setArchiveId] = useState<string | null>(null)
@@ -439,7 +499,12 @@ export function App() {
       : !summary.count
         ? `当前 ${current.length} 项订阅均已关闭续费，未计入预计支出。`
         : '未来 30 天没有预计扣款。'
-    const attention = attentionItems(data, today)
+    const attention = decisionAttention(
+      data,
+      snapshot?.decisions ?? [],
+      snapshot?.usage ?? [],
+      today
+    )
     return (
       <>
         <header className="page-head">
@@ -673,6 +738,15 @@ export function App() {
             )}
           </Panel>
         </div>
+        {snapshot && (
+          <ChangeSummary
+            snapshot={snapshot}
+            currency={currency}
+            today={today}
+            compact
+            onOpen={(id) => openDetail(id, 'overview')}
+          />
+        )}
         <Panel
           title="近 6 个月实际支出"
           className="spaced"
@@ -690,7 +764,25 @@ export function App() {
         (status === 'all' ||
           (status === 'archived' ? s.status === 'archived' : s.status !== 'archived')) &&
         (category === '全部分类' || s.category === category) &&
-        s.name.toLowerCase().includes(query.toLowerCase())
+        s.name.toLowerCase().includes(query.toLowerCase()) &&
+        (decisionFilter === 'all' ||
+          (snapshot?.decisions.find((d) => d.subscriptionId === s.id)?.decision ?? 'review') ===
+            decisionFilter) &&
+        (frequencyFilter === 'all' ||
+          (snapshot?.decisions.find((d) => d.subscriptionId === s.id)?.frequency ?? 'unknown') ===
+            frequencyFilter)
+    )
+    visible.sort((a, b) =>
+      sort === 'name'
+        ? a.name.localeCompare(b.name, 'zh-CN')
+        : sort === 'next'
+          ? (nextBills(a, today, 1, prices)[0]?.due ?? '9999').localeCompare(
+              nextBills(b, today, 1, prices)[0]?.due ?? '9999'
+            )
+          : sort === 'cost'
+            ? (convertMinor(monthlyMinor(b), b.currency, currency, rates) ?? -1) -
+              (convertMinor(monthlyMinor(a), a.currency, currency, rates) ?? -1)
+            : b.updatedAt.localeCompare(a.updatedAt)
     )
     return (
       <>
@@ -739,6 +831,37 @@ export function App() {
             ]}
           />
         </div>
+        <div className="list-extra-tools">
+          <SelectField
+            label="续费决策筛选"
+            value={decisionFilter}
+            onChange={setDecisionFilter}
+            options={[
+              { value: 'all', label: '全部续费决定' },
+              ...Object.entries(decisionNames).map(([value, label]) => ({ value, label }))
+            ]}
+          />
+          <SelectField
+            label="使用频率筛选"
+            value={frequencyFilter}
+            onChange={setFrequencyFilter}
+            options={[
+              { value: 'all', label: '全部使用频率' },
+              ...Object.entries(frequencyNames).map(([value, label]) => ({ value, label }))
+            ]}
+          />
+          <SelectField
+            label="订阅排序"
+            value={sort}
+            onChange={setSort}
+            options={[
+              { value: 'recent', label: '最近更新' },
+              { value: 'name', label: '名称顺序' },
+              { value: 'next', label: '下次扣款' },
+              { value: 'cost', label: '月均费用从高到低' }
+            ]}
+          />
+        </div>
         <div className="subscription-list">
           {visible.map((s) => {
             const start = records.some(
@@ -748,32 +871,67 @@ export function App() {
               : today
             const next = nextBills(s, start, 1, prices)[0]
             return (
-              <button
-                className="subscription-row"
-                key={s.id}
-                onClick={() => openDetail(s.id, 'list')}
-                aria-label={`查看 ${s.name} 详情`}
-              >
-                <SubscriptionAvatar {...s} />
-                <span className="row-info">
-                  <span className="row-title">
-                    <strong>{s.name}</strong>
-                    <Status subscription={s} />
+              <div className="subscription-row-wrapper" key={s.id}>
+                <button
+                  className="subscription-row"
+                  onClick={() => openDetail(s.id, 'list')}
+                  aria-label={`查看 ${s.name} 详情`}
+                >
+                  <SubscriptionAvatar {...s} />
+                  <span className="row-info">
+                    <span className="row-title">
+                      <strong>{s.name}</strong>
+                      <Status subscription={s} />
+                    </span>
+                    <small>
+                      {s.category}
+                      {next ? ` · ${formatDate(next.due)} 预计扣款` : ''}
+                      {!s.autoRenew && s.status !== 'archived'
+                        ? ` · ${accessLabel(s, today)}${s.accessEndsOn ? `（${s.accessEndsOn}）` : ''}`
+                        : ''}
+                    </small>
                   </span>
-                  <small>
-                    {s.category}
-                    {next ? ` · ${formatDate(next.due)} 预计扣款` : ''}
-                    {!s.autoRenew && s.status !== 'archived'
-                      ? ` · ${accessLabel(s, today)}${s.accessEndsOn ? `（${s.accessEndsOn}）` : ''}`
-                      : ''}
-                  </small>
-                </span>
-                <span className="row-price">
-                  <strong>{formatMoney(s.amountMinor, s.currency)}</strong>
-                  <small>/ {cycleLabel(s).slice(1)}</small>
-                </span>
-                <ChevronRight size={17} className="chevron" />
-              </button>
+                  <span className="row-price">
+                    <strong>{formatMoney(s.amountMinor, s.currency)}</strong>
+                    <small>/ {cycleLabel(s).slice(1)}</small>
+                  </span>
+                  <ChevronRight size={17} className="chevron" />
+                </button>
+                <Dropdown
+                  trigger={['click']}
+                  menu={{
+                    items: [
+                      { key: 'used', label: '今天用过' },
+                      { key: 'keep', label: '继续保留' },
+                      { key: 'consider', label: '考虑取消' }
+                    ],
+                    onClick: ({ key }) =>
+                      void perform(async () => {
+                        if (key === 'used') unwrap(await window.desktop.usageRecord(s.id, today))
+                        else {
+                          const { updatedAt, ...current } =
+                            snapshot?.decisions.find((d) => d.subscriptionId === s.id) ?? {}
+                          unwrap(
+                            await window.desktop.decisionSave(
+                              decisionInputSchema.parse({
+                                ...current,
+                                subscriptionId: s.id,
+                                decision: key
+                              })
+                            )
+                          )
+                        }
+                        await reload()
+                      })
+                  }}
+                >
+                  <Button
+                    type="text"
+                    aria-label={`${s.name} 快捷操作`}
+                    icon={<MoreHorizontal size={17} />}
+                  />
+                </Dropdown>
+              </div>
             )
           })}
         </div>
@@ -886,6 +1044,17 @@ export function App() {
             </dl>
           </Panel>
         </div>
+        <DecisionPanel
+          key={
+            s.id +
+            ':' +
+            (snapshot?.decisions.find((d) => d.subscriptionId === s.id)?.updatedAt ?? '')
+          }
+          subscription={s}
+          decision={snapshot?.decisions.find((d) => d.subscriptionId === s.id)}
+          usage={snapshot?.usage ?? []}
+          onReload={reload}
+        />
         <LedgerHistory
           key={s.id}
           schedule={
@@ -1191,6 +1360,12 @@ export function App() {
             </span>
             <span className="brand-name">续订</span>
           </div>
+          <CommandMenu
+            subscriptions={data}
+            onOpen={(id) => openDetail(id, currentPage)}
+            onPage={go}
+            onNew={() => setRoute({ page: 'edit', from: 'list' })}
+          />
           <nav id="main-navigation" aria-label="主导航">
             {navItems.map(({ page, icon: Icon }) => (
               <button
@@ -1214,9 +1389,33 @@ export function App() {
           <div className="sidebar-bottom" title={collapsed ? '本地存储' : undefined}>
             <span className="local-dot" />
             <div className="storage-label">
-              本地存储<small>你的订阅，你的数据。</small>
+              <button
+                className="storage-button"
+                onClick={() => {
+                  sessionStorage.setItem('xuding.settings-tab', 'sync')
+                  go('settings')
+                }}
+              >
+                {syncLabel}
+              </button>
+              <small>你的订阅，你的数据。</small>
             </div>
           </div>
+          {securityEnabled && (
+            <button
+              className="sidebar-lock"
+              aria-label="锁定续订"
+              title="锁定续订"
+              onClick={() =>
+                void perform(async () => {
+                  unwrap(await window.desktop.securityAction({ action: 'lock' }))
+                })
+              }
+            >
+              <LockKeyhole size={16} />
+              <span>锁定</span>
+            </button>
+          )}
         </aside>
         <main className={`main${route.page === 'settings' ? ' settings-main' : ''}`}>
           {error && (

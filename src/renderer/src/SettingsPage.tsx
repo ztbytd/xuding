@@ -1,3 +1,5 @@
+import { SecuritySettings } from './SecuritySettings'
+import { SyncSettings } from './SyncSettings'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button, Drawer, Input, Modal, Popconfirm, Progress, Switch, Tabs, Tag } from 'antd'
@@ -44,12 +46,15 @@ const kindNames = {
   daily: '自动备份',
   manual: '手动备份',
   'before-import': 'CSV 导入前',
+  'before-sync': '同步前保护',
   'before-restore': '恢复前快照'
 }
 const tabs = [
   { key: 'general', label: '通用' },
   { key: 'notifications', label: '通知' },
+  { key: 'security', label: '安全' },
   { key: 'data', label: '数据与备份' },
+  { key: 'sync', label: '同步与设备' },
   { key: 'about', label: '关于与更新' }
 ]
 export function SettingsPage({
@@ -175,7 +180,7 @@ export function SettingsPage({
     </div>
   )
   const protectionHelp =
-    '加密保护备份文件。本机 SQLite 数据库与升级恢复副本仍未加密。密码遗失无法找回；更改密码仅影响后续备份，旧文件仍使用原密码。'
+    '加密保护备份文件。本机账本加密在“安全”中单独设置。密码遗失无法找回；更改密码仅影响后续备份，旧文件仍使用原密码。'
   const updateBusy = update && ['checking', 'downloading', 'installing'].includes(update.phase)
   return (
     <section className="settings-page">
@@ -212,6 +217,8 @@ export function SettingsPage({
           {error}
         </div>
       )}
+      {tab === 'security' && <SecuritySettings />}
+      {tab === 'sync' && <SyncSettings onReload={onReload} />}
       {tab === 'general' && (
         <div className="settings-tab-content">
           <Region title="启动与后台">
@@ -355,7 +362,7 @@ export function SettingsPage({
             )}
             {row(
               '自动备份保留时间',
-              '手动备份长期保留；导入及恢复前的保护副本额外保留最近 10 份。',
+              '手动备份长期保留；导入、同步及恢复前的保护副本额外保留最近 10 份。',
               <SelectField
                 label="备份保留时间"
                 value={String(settings.backupRetentionDays)}
@@ -607,6 +614,15 @@ export function SettingsPage({
               <Button
                 onClick={() =>
                   void run(async () => {
+                    unwrap(await window.desktop.openLicenses())
+                  })
+                }
+              >
+                第三方许可
+              </Button>
+              <Button
+                onClick={() =>
+                  void run(async () => {
                     unwrap(
                       await window.desktop.openWebsite('https://github.com/ztbytd/xuding/issues')
                     )
@@ -704,7 +720,7 @@ export function SettingsPage({
         size={570}
       >
         <p className="footnote">
-          副本包含完整本机数据库，未加密。用于升级异常时恢复；账本备份请使用“备份历史”。成功启动后保留最近
+          副本包含完整本机数据库；启用本地加密后的新副本也会加密。用于升级异常时恢复；账本备份请使用“备份历史”。成功启动后保留最近
           3 个可用恢复点。
         </p>
         {!checkpoints.length ? (
@@ -841,7 +857,7 @@ export function SettingsPage({
                 />
               )}
             <p className="footnote">
-              密码遗失无法找回。修改密码只影响后续备份；旧备份仍使用原密码。本机数据库和升级副本仍未加密。
+              密码遗失无法找回。修改密码只影响后续备份；旧备份仍使用原密码。本机账本的加密状态请查看“安全”。
             </p>
           </div>
         ) : (

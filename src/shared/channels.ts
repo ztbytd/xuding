@@ -1,4 +1,11 @@
 export const channels = {
+  openLicenses: 'application:licenses',
+  decisionSave: 'decisions:save',
+  usageRecord: 'usage:record',
+  securityStatus: 'security:status',
+  securityAction: 'security:action',
+  syncStatus: 'sync:status',
+  syncAction: 'sync:action',
   protectionStatus: 'backup:protection-status',
   configureProtection: 'backup:protection-configure',
   selectBackup: 'backup:select',

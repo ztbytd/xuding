@@ -39,4 +39,16 @@ export class CredentialVault implements BackupVault {
   async remove(id: string): Promise<void> {
     await unlink(this.path(id)).catch(() => {})
   }
+  async createSecret(value: string): Promise<string> {
+    if (value.length > 16384) throw new Error('凭据过大。')
+    const protectedValue = await this.protect(value)
+    if ((await this.unprotect(protectedValue)) !== value) throw new Error('系统凭据验证失败。')
+    await mkdir(this.directory, { recursive: true })
+    const id = randomUUID()
+    await atomicWrite(this.path(id), protectedValue)
+    return id
+  }
+  async readSecret(id: string): Promise<string> {
+    return this.unprotect(await readFile(this.path(id)))
+  }
 }

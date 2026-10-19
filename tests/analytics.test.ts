@@ -174,8 +174,17 @@ describe('budgets and spending analysis', () => {
     expect(repo.finance.budgets()[0].amountMinor).toBe(50000)
     repo.import(saved, true)
     expect(repo.list()).toHaveLength(0)
-    if (saved.version !== 3) throw new Error('Wrong version')
-    const { budgets, budgetReminders, importBatches, ...v2 } = saved
+    if (saved.version !== 4) throw new Error('Wrong version')
+    const {
+      budgets,
+      budgetReminders,
+      importBatches,
+      usage,
+      decisions,
+      histories,
+      rateHistory,
+      ...v2
+    } = saved
     expect(() => repo.import({ ...v2, version: 2 }, true)).toThrow('新版备份')
     repo.import({ ...v2, version: 2 })
     expect(repo.finance.budgets()).toHaveLength(1)
