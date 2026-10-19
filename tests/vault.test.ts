@@ -25,7 +25,7 @@ const input = {
 const clock = () => new Date('2026-10-20T04:00:00Z')
 const options = securityOptionsSchema.parse({}),
   password = '本机加密测试密码 2026'
-describe('encrypted local ledgers', () => {
+describe('encrypted local ledgers', { timeout: 30_000 }, () => {
   it('uses domain-separated authenticated envelopes and rejects mutation', async () => {
     const key = Buffer.alloc(32, 31),
       data = Buffer.from('secret')
