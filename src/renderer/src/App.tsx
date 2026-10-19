@@ -989,7 +989,7 @@ export function App() {
             </div>
           </div>
         </aside>
-        <main className="main">
+        <main className={`main${route.page === 'settings' ? ' settings-main' : ''}`}>
           {error && (
             <div role="alert" className="error-banner">
               <span>{error}</span>

@@ -99,7 +99,7 @@ export function SettingsPage({
     />
   )
   return (
-    <>
+    <section className="settings-page">
       <header className="page-head">
         <div>
           <h1>设置与备份</h1>
@@ -294,9 +294,9 @@ export function SettingsPage({
           </div>
         </Region>
       </div>
-      <div className="settings-about">
+      <footer className="settings-about">
         续订 {snapshot.version} · MIT 开源许可 · 本机 SQLite 存储
-      </div>
+      </footer>
       <Drawer
         title="备份历史"
         closable={{ 'aria-label': '关闭备份历史' }}
@@ -393,6 +393,6 @@ export function SettingsPage({
           </div>
         )}
       </Modal>
-    </>
+    </section>
   )
 }
