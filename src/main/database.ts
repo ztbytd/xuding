@@ -1,4 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
+import { LedgerStore } from './ledger'
+import { localDate } from '../shared/billing'
+import { priceAt } from '../shared/ledger-model'
 import { randomUUID } from 'node:crypto'
 import {
   backupSchema,
@@ -19,14 +22,22 @@ import type { ExchangeRates } from '../shared/exchange'
 
 export class SubscriptionRepository {
   private db: DatabaseSync
-  constructor(path: string) {
+  readonly ledger: LedgerStore
+  constructor(
+    path: string,
+    private now = () => new Date()
+  ) {
     this.db = new DatabaseSync(path)
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
     const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number })
       .user_version
-    if (version > 2) {
+    if (version > 3) {
       this.db.close()
       throw new Error('数据库由较新版本创建，请升级续订后再打开。')
+    }
+    if (version > 0 && version < 3 && path !== ':memory:') {
+      const snapshot = path + '.pre-v3-' + Date.now() + '.db'
+      this.db.exec("VACUUM INTO '" + snapshot.replaceAll("'", "''") + "'")
     }
     if (version === 0)
       this.db.exec(`
@@ -38,9 +49,26 @@ export class SubscriptionRepository {
       PRAGMA user_version=2;
       COMMIT;
     `)
-    if (version === 1) this.db.exec('PRAGMA user_version=2')
+    this.ledger = new LedgerStore(this.db, () => this.rawList(), this.now)
+    if (version < 3)
+      this.transaction(() => {
+        this.db.exec(`
+        CREATE TABLE bills(id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES subscriptions(id), due TEXT NOT NULL, manual INTEGER NOT NULL, document TEXT NOT NULL);
+        CREATE UNIQUE INDEX scheduled_bill ON bills(subscription_id,due) WHERE manual=0;
+        CREATE TABLE prices(id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES subscriptions(id), effective_on TEXT NOT NULL, document TEXT NOT NULL, UNIQUE(subscription_id,effective_on));
+        CREATE TABLE ledger_changes(id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES subscriptions(id), document TEXT NOT NULL);
+        CREATE TABLE billing_tracking(subscription_id TEXT PRIMARY KEY REFERENCES subscriptions(id), document TEXT NOT NULL);
+        CREATE TABLE ledger_events(id INTEGER PRIMARY KEY AUTOINCREMENT);
+      `)
+        for (const item of this.rawList()) this.ledger.ensure(item)
+        this.db.exec('PRAGMA user_version=3')
+      })
   }
   list(): Subscription[] {
+    const prices = this.ledger.prices()
+    return this.rawList().map((s) => ({ ...s, ...priceAt(s, localDate(this.now()), prices) }))
+  }
+  private rawList(): Subscription[] {
     return this.db
       .prepare('SELECT document FROM subscriptions ORDER BY updated_at DESC, id')
       .all()
@@ -52,9 +80,10 @@ export class SubscriptionRepository {
   }
   save(raw: SubscriptionInput, id?: string): Subscription {
     const input = subscriptionInputSchema.parse(raw)
+    this.ledger.sync()
     const previous = id ? this.get(id) : undefined
     if (id && !previous) throw new Error('订阅不存在，请刷新后重试。')
-    const now = new Date().toISOString()
+    const now = this.now().toISOString()
     const item = subscriptionSchema.parse({
       ...input,
       id: id || randomUUID(),
@@ -64,11 +93,23 @@ export class SubscriptionRepository {
     this.transaction(() => {
       this.upsert(item)
       this.audit(item)
+      this.ledger.ensure(item)
+      this.ledger.recordPrice(item)
+      if (
+        previous &&
+        (previous.anchorDate !== item.anchorDate ||
+          previous.cycle !== item.cycle ||
+          previous.interval !== item.interval ||
+          previous.autoRenew !== item.autoRenew ||
+          previous.status !== item.status)
+      )
+        this.ledger.reconsiderToday(item.id)
     })
-    return item
+    this.ledger.sync()
+    return { ...item, ...priceAt(item, localDate(this.now()), this.ledger.prices()) }
   }
   archive(id: string): void {
-    const previous = this.get(id)
+    const previous = this.list().find((s) => s.id === id)
     if (!previous) throw new Error('订阅不存在。')
     const { id: _id, createdAt: _created, updatedAt: _updated, ...input } = previous
     this.save({ ...input, status: 'archived', autoRenew: false }, id)
@@ -113,8 +154,11 @@ export class SubscriptionRepository {
   }
   revision(): number {
     return Number(
-      this.db.prepare('SELECT COALESCE(MAX(id),0) AS revision FROM subscription_changes').get()!
-        .revision
+      this.db
+        .prepare(
+          'SELECT (SELECT COALESCE(MAX(id),0) FROM subscription_changes) + (SELECT COALESCE(MAX(id),0) FROM ledger_events) AS revision'
+        )
+        .get()!.revision
     )
   }
   metadata(key: string): unknown {
@@ -135,7 +179,11 @@ export class SubscriptionRepository {
   export(): Backup {
     return {
       format: 'xuding',
-      version: 1,
+      version: 2,
+      bills: this.ledger.bills(),
+      prices: this.ledger.prices(),
+      changes: this.ledger.changes(),
+      tracking: this.ledger.tracking(),
       exportedAt: new Date().toISOString(),
       subscriptions: this.list()
     }
@@ -161,7 +209,16 @@ export class SubscriptionRepository {
       for (const item of backup.subscriptions) {
         this.upsert(item)
         this.audit(item)
+        if (backup.version === 1) {
+          this.ledger.ensure(item)
+          this.ledger.recordPrice(item)
+        }
       }
+      if (backup.version === 2)
+        this.ledger.import(
+          backup,
+          backup.subscriptions.map((s) => s.id)
+        )
     })
     return backup.subscriptions.length
   }

@@ -1,4 +1,7 @@
 export const channels = {
+  updateBill: 'bills:update',
+  addBill: 'bills:add',
+  changePrice: 'prices:change',
   load: 'subscriptions:load',
   exchangeRates: 'exchange:rates',
   pickIcon: 'subscriptions:pick-icon',

@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { dateSchema } from './model'
-import type { Currency } from './model'
+import { dateSchema } from './primitives'
+import type { Currency } from './primitives'
 
 const rate = z.number().positive().finite().max(1_000_000)
 export const exchangeRatesSchema = z

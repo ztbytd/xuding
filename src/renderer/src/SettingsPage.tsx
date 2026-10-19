@@ -371,6 +371,11 @@ export function SettingsPage({
               {preview.source}
               <small>备份时间：{timestamp(preview.exportedAt)}</small>
             </p>
+            <p className="footnote">
+              {preview.legacy
+                ? '旧版备份仅包含订阅，现有账单与价格历史会保留。'
+                : `包含 ${preview.bills} 笔账单、${preview.prices} 条价格记录；覆盖订阅时一并恢复其账单与价格历史。`}
+            </p>
             <div className="restore-counts">
               <span>
                 新增<strong>{preview.added}</strong>

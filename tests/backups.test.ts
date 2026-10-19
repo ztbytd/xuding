@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 import { SubscriptionRepository } from '../src/main/database'
 import { DatabaseSync } from 'node:sqlite'
+import { readdirSync } from 'node:fs'
+import { localDate } from '../src/shared/billing'
 import { BackupService } from '../src/main/backups'
 import { subscription } from './fixtures'
 
@@ -126,13 +128,34 @@ describe('automatic backups and guarded restoration', () => {
     expect(service.status().lastSuccess).toBe(clock.toISOString())
     expect(await service.history()).toHaveLength(1)
   })
-  it('upgrades a v0.1 database with legacy preferences without changing subscriptions', () => {
+  it('invalidates a restore preview after changing a bill or price', async () => {
+    const item = repo.save({ ...input, anchorDate: localDate() })
+    await service.nowBackup()
+    const entry = (await service.history())[0]
+    const first = await service.preview(entry.id),
+      bill = repo.ledger.bills()[0]
+    repo.ledger.updateBill(
+      { id: bill.id, expectedUpdatedAt: bill.updatedAt, status: 'skipped' },
+      null
+    )
+    await expect(service.restore(first.token)).rejects.toThrow('账本已发生变化')
+    const second = await service.preview(entry.id)
+    repo.ledger.changePrice({
+      subscriptionId: item.id,
+      effectiveOn: localDate(),
+      amountMinor: 777,
+      currency: 'CNY'
+    })
+    await expect(service.restore(second.token)).rejects.toThrow('账本已发生变化')
+  })
+  it.each([1, 2])('upgrades database version %i with an intact SQLite recovery copy', (version) => {
     const file = join(directory, 'legacy.db')
     const legacy = new DatabaseSync(file)
     legacy.exec(
       'CREATE TABLE subscriptions (id TEXT PRIMARY KEY, document TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE subscription_changes (id INTEGER PRIMARY KEY, subscription_id TEXT NOT NULL, document TEXT NOT NULL, changed_at TEXT NOT NULL); CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE reminders (key TEXT PRIMARY KEY,sent_at TEXT NOT NULL); PRAGMA user_version=1;'
     )
-    const item = subscription()
+    legacy.exec(`PRAGMA user_version=${version}`)
+    const item = subscription({ anchorDate: '2025-01-31' })
     legacy
       .prepare('INSERT INTO subscriptions VALUES(?,?,?)')
       .run(item.id, JSON.stringify(item), item.updatedAt)
@@ -140,7 +163,7 @@ describe('automatic backups and guarded restoration', () => {
       .prepare('INSERT INTO settings VALUES(?,?)')
       .run('preferences', JSON.stringify({ notificationsEnabled: true }))
     legacy.close()
-    const migrated = new SubscriptionRepository(file)
+    const migrated = new SubscriptionRepository(file, () => new Date('2026-01-31T12:00:00+08:00'))
     try {
       expect(migrated.list()).toEqual([item])
       expect(migrated.settings()).toMatchObject({
@@ -150,11 +173,28 @@ describe('automatic backups and guarded restoration', () => {
         launchAtLogin: false
       })
       expect(migrated.export().subscriptions[0].accessEndsOn).toBeUndefined()
+      expect(migrated.ledger.bills()).toHaveLength(0)
+      migrated.ledger.sync()
+      expect(migrated.ledger.bills().map((b) => b.due)).toEqual(['2026-01-31'])
     } finally {
       migrated.close()
     }
     const check = new DatabaseSync(file)
-    expect(check.prepare('PRAGMA user_version').get()!.user_version).toBe(2)
-    check.close()
+    try {
+      expect(check.prepare('PRAGMA user_version').get()!.user_version).toBe(3)
+    } finally {
+      check.close()
+    }
+    const snapshot = readdirSync(directory).find((name) => name.startsWith('legacy.db.pre-v3-'))!
+    expect(snapshot).toBeTruthy()
+    const before = new DatabaseSync(join(directory, snapshot), { readOnly: true })
+    try {
+      expect(before.prepare('PRAGMA user_version').get()!.user_version).toBe(version)
+      expect(
+        JSON.parse(String(before.prepare('SELECT document FROM subscriptions').get()!.document))
+      ).toEqual(item)
+    } finally {
+      before.close()
+    }
   })
 })

@@ -50,11 +50,7 @@ test('icons persist in backups and overview explains renewal status', async ({},
     await rm(iconFile)
     await go('总览')
     await expect(page.locator('.currency-picker')).toContainText('人民币 CNY')
-    await expect(page.locator('.stats .stat > strong')).toHaveText([
-      '¥720.00',
-      '¥8,640.00',
-      '¥720.00'
-    ])
+    await expect(page.locator('.stats .stat > strong')).toHaveText(['¥0.00', '¥720.00', '¥720.00'])
     await expect(page.locator('.bar-row')).toContainText('¥720.00')
     await expect(page.getByRole('img', { name: 'Chatgpt-pro图标' })).toBeVisible()
     await page.screenshot({

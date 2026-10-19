@@ -3,6 +3,9 @@ import { channels } from '../shared/channels'
 import type { DesktopApi } from '../shared/model'
 
 const api: DesktopApi = {
+  updateBill: (input) => ipcRenderer.invoke(channels.updateBill, input),
+  addBill: (input) => ipcRenderer.invoke(channels.addBill, input),
+  changePrice: (input) => ipcRenderer.invoke(channels.changePrice, input),
   load: () => ipcRenderer.invoke(channels.load),
   exchangeRates: (force) => ipcRenderer.invoke(channels.exchangeRates, force),
   pickIcon: () => ipcRenderer.invoke(channels.pickIcon),

@@ -1,25 +1,21 @@
 import { z } from 'zod'
 import type { ExchangeRates, ExchangeResult } from './exchange'
 
-export const currencies = ['CNY', 'USD', 'EUR', 'HKD'] as const
-export const categories = [
-  '效率工具',
-  '影音娱乐',
-  '云存储',
-  '学习成长',
-  '生活服务',
-  '其他'
-] as const
-export type Currency = (typeof currencies)[number]
-
-export function isDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || value < '1970-01-01' || value > '2100-12-31')
-    return false
-  const date = new Date(value + 'T00:00:00Z')
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
-}
-
-export const dateSchema = z.string().refine(isDate, '请输入有效日期（1970—2100 年）')
+import { currencies, dateSchema } from './primitives'
+export { currencies, dateSchema, isDate } from './primitives'
+export type { Currency } from './primitives'
+import type { Currency } from './primitives'
+import { billRecordSchema, priceSchema, ledgerChangeSchema, trackingSchema } from './ledger-model'
+import type {
+  BillRecord,
+  BillInput,
+  BillUpdate,
+  Price,
+  PriceInput,
+  LedgerChange
+} from './ledger-model'
+import { categories } from './primitives'
+export { categories } from './primitives'
 export const subscriptionInputSchema = z
   .object({
     name: z.string().trim().min(1, '请输入订阅名称').max(80),
@@ -66,7 +62,14 @@ export const subscriptionSchema = subscriptionInputSchema
   .strict()
 export type SubscriptionInput = z.infer<typeof subscriptionInputSchema>
 export type Subscription = z.infer<typeof subscriptionSchema>
-export type Bill = { subscription: Subscription; due: string; amountMinor: number }
+export type Bill = {
+  subscription: Subscription
+  due: string
+  amountMinor: number
+  currency: Currency
+  status?: BillRecord['status']
+  recordId?: string
+}
 export const settingsPatchSchema = z
   .object({
     notificationsEnabled: z.boolean().optional(),
@@ -89,18 +92,59 @@ export const settingsSchema = z
   .strict()
 export type Settings = z.infer<typeof settingsSchema>
 export type SettingsPatch = z.infer<typeof settingsPatchSchema>
-export const backupSchema = z
-  .object({
-    format: z.literal('xuding'),
-    version: z.literal(1),
-    exportedAt: z.string().datetime(),
-    subscriptions: z.array(subscriptionSchema).max(10000)
+const backupBase = z.object({
+  format: z.literal('xuding'),
+  exportedAt: z.string().datetime(),
+  subscriptions: z.array(subscriptionSchema).max(10000)
+})
+const legacyBackupSchema = backupBase.extend({ version: z.literal(1) }).strict()
+const currentBackupSchema = backupBase
+  .extend({
+    version: z.literal(2),
+    bills: z.array(billRecordSchema).max(100000),
+    prices: z.array(priceSchema).max(100000),
+    changes: z.array(ledgerChangeSchema).max(500000),
+    tracking: z.array(trackingSchema).max(10000)
   })
   .strict()
-  .refine(
-    (value) => new Set(value.subscriptions.map((s) => s.id)).size === value.subscriptions.length,
-    '备份中包含重复 ID'
-  )
+export const backupSchema = z
+  .discriminatedUnion('version', [legacyBackupSchema, currentBackupSchema])
+  .superRefine((value, ctx) => {
+    const ids = new Set(value.subscriptions.map((s) => s.id))
+    const fail = (message: string) => ctx.addIssue({ code: 'custom', message })
+    if (ids.size !== value.subscriptions.length) fail('备份中包含重复 ID')
+    if (value.version === 1) return
+    for (const rows of [value.bills, value.prices, value.changes]) {
+      if (new Set(rows.map((r) => r.id)).size !== rows.length) fail('备份中包含重复记录')
+      if (rows.some((r) => !ids.has(r.subscriptionId))) fail('账单或价格缺少所属订阅')
+    }
+    if (
+      new Set(value.bills.filter((b) => !b.manual).map((b) => b.subscriptionId + ':' + b.due))
+        .size !== value.bills.filter((b) => !b.manual).length
+    )
+      fail('备份中包含重复周期账单')
+    if (
+      new Set(value.prices.map((p) => p.subscriptionId + ':' + p.effectiveOn)).size !==
+      value.prices.length
+    )
+      fail('价格生效日期重复')
+    if (
+      new Set(value.tracking.map((t) => t.subscriptionId)).size !== ids.size ||
+      value.tracking.length !== ids.size ||
+      value.tracking.some((t) => !ids.has(t.subscriptionId))
+    )
+      fail('账单跟踪记录不完整')
+    if (
+      value.subscriptions.some(
+        (s) =>
+          !value.prices.some((p) => p.subscriptionId === s.id && p.effectiveOn === '1970-01-01')
+      )
+    )
+      fail('缺少初始价格')
+    const billOwners = new Map(value.bills.map((b) => [b.id, b.subscriptionId]))
+    if (value.changes.some((c) => c.billId && billOwners.get(c.billId) !== c.subscriptionId))
+      fail('变更记录缺少所属账单')
+  })
 export type Backup = z.infer<typeof backupSchema>
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string }
 export type BackupStatus = {
@@ -124,12 +168,18 @@ export type RestorePreview = {
   added: number
   overwritten: number
   retained: number
+  bills: number
+  prices: number
+  legacy: boolean
 }
 export type DesktopAction = { sequence: number } & (
   { page: 'new' } | { page: 'detail'; id: string }
 )
 export type Snapshot = {
   subscriptions: Subscription[]
+  bills: BillRecord[]
+  prices: Price[]
+  changes: LedgerChange[]
   settings: Settings
   version: string
   exchangeRates: ExchangeRates | null
@@ -140,6 +190,9 @@ export type Snapshot = {
 export interface DesktopApi {
   load(): Promise<Result<Snapshot>>
   save(input: SubscriptionInput, id?: string): Promise<Result<Subscription>>
+  updateBill(input: BillUpdate): Promise<Result<BillRecord>>
+  addBill(input: BillInput): Promise<Result<BillRecord>>
+  changePrice(input: PriceInput): Promise<Result<void>>
   archive(id: string): Promise<Result<void>>
   settings(input: SettingsPatch): Promise<Result<Settings>>
   exportBackup(): Promise<Result<boolean>>

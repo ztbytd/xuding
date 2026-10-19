@@ -36,7 +36,7 @@ test('overview converts the whole ledger and survives missing rates, offline use
     })
     await page.reload()
     await expect(page.locator('.exchange-status')).toContainText('暂缺汇率')
-    await expect(page.locator('.stats .stat > strong')).toHaveText(['—', '—', '—'])
+    await expect(page.locator('.stats .stat > strong')).toHaveText(['¥0.00', '—', '—'])
     await expect(page.locator('.exchange-notice')).toContainText('缺少 USD → CNY 汇率')
     await expect(page.locator('.subscription-row')).toHaveCount(2)
     await expect(page.getByRole('button', { name: '查看 美元订阅 详情' })).toContainText(
@@ -48,11 +48,7 @@ test('overview converts the whole ledger and survives missing rates, offline use
     })
     await mockExchange(app)
     await page.getByRole('button', { name: '刷新汇率' }).click()
-    await expect(page.locator('.stats .stat > strong')).toHaveText([
-      '¥750.00',
-      '¥9,000.00',
-      '¥750.00'
-    ])
+    await expect(page.locator('.stats .stat > strong')).toHaveText(['¥0.00', '¥750.00', '¥750.00'])
     await expect(page.locator('.bar-row')).toHaveCount(2)
     await expect(page.locator('.overview-context')).toContainText('2 项续费订阅')
     await expect(page.locator('.exchange-notice')).toHaveCount(0)
@@ -68,8 +64,8 @@ test('overview converts the whole ledger and survives missing rates, offline use
     await page.getByRole('combobox', { name: '统计币种' }).click()
     await page.getByRole('option', { name: '美元 USD', exact: true }).click()
     await expect(page.locator('.stats .stat > strong')).toHaveText([
+      'US$0.00',
       'US$104.17',
-      'US$1,250.00',
       'US$104.17'
     ])
     await expect(page.locator('.subscription-row')).toHaveCount(2)
@@ -87,8 +83,8 @@ test('overview converts the whole ledger and survives missing rates, offline use
     await page.getByRole('navigation').getByRole('button', { name: '总览', exact: true }).click()
     await expect(page.locator('.currency-picker')).toContainText('美元 USD')
     await expect(page.locator('.stats .stat > strong')).toHaveText([
+      'US$0.00',
       'US$107.50',
-      'US$1,290.00',
       'US$107.50'
     ])
     await page
@@ -105,15 +101,15 @@ test('overview converts the whole ledger and survives missing rates, offline use
     await mockExchange(app, true)
     await page.reload()
     await expect(page.locator('.stats .stat > strong')).toHaveText([
+      'US$0.00',
       'US$107.50',
-      'US$1,290.00',
       'US$107.50'
     ])
     await page.getByRole('button', { name: '刷新汇率' }).click()
     await expect(page.locator('.exchange-status')).toContainText('更新失败 · 使用缓存')
     await expect(page.locator('.stats .stat > strong')).toHaveText([
+      'US$0.00',
       'US$107.50',
-      'US$1,290.00',
       'US$107.50'
     ])
     const saved = await page.evaluate(() => window.desktop.load())

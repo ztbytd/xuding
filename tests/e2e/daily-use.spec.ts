@@ -95,8 +95,10 @@ test('background reminders, entitlement dates and guarded backup recovery', asyn
     await expect(page.getByRole('textbox', { name: '权益到期日', exact: true })).toHaveValue(
       '2026-10-21'
     )
-    await page.getByRole('spinbutton', { name: '金额', exact: true }).fill('29.99')
-    await page.getByRole('button', { name: '保存修改', exact: true }).click()
+    await page.getByRole('button', { name: '取消编辑', exact: true }).click()
+    await page.getByRole('button', { name: '调整价格', exact: true }).click()
+    await page.getByRole('spinbutton', { name: '新价格', exact: true }).fill('29.99')
+    await page.getByRole('button', { name: '保存价格', exact: true }).click()
     await expect(page.locator('.detail-price')).toContainText('29.99')
     await go('设置与备份')
     await page.getByRole('button', { name: '备份历史', exact: true }).click()

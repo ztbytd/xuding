@@ -37,7 +37,6 @@ import {
   addDays,
   cycleLabel,
   daysBetween,
-  forecast,
   formatDate,
   formatMoney,
   isRenewing,
@@ -52,6 +51,10 @@ import { HelpTip, SelectField } from './controls'
 import { convertMinor } from '../../shared/exchange'
 import type { ExchangeRates } from '../../shared/exchange'
 import { SettingsPage } from './SettingsPage'
+import { BillEditor, PriceEditor, RecordRows, LedgerHistory, SpendingTrend } from './Ledger'
+import type { BillTarget } from './Ledger'
+import { actualTotals, billStatus, calendarBills } from '../../shared/ledger'
+import type { BillRecord } from '../../shared/ledger-model'
 import { accessLabel, attentionItems } from '../../shared/attention'
 
 type MainPage = 'overview' | 'list' | 'calendar' | 'settings'
@@ -166,7 +169,7 @@ function BillRows({
       {bills.map((b) => (
         <button
           className="subscription-row"
-          key={`${b.subscription.id}-${b.due}`}
+          key={b.recordId || `${b.subscription.id}-${b.due}`}
           onClick={() => onOpen(b.subscription.id)}
           aria-label={`查看 ${b.subscription.name} 详情`}
         >
@@ -175,23 +178,24 @@ function BillRows({
             <strong>{b.subscription.name}</strong>
             <small>
               {formatDate(b.due)} ·{' '}
-              {daysBetween(localDate(), b.due) === 0
-                ? '今天'
-                : `${daysBetween(localDate(), b.due)}天后`}
+              {b.status
+                ? billStatus[b.status]
+                : daysBetween(localDate(), b.due) === 0
+                  ? '今天'
+                  : `${daysBetween(localDate(), b.due)}天后`}
             </small>
           </span>
           <span className="row-price">
             <strong>
-              {displayCurrency && displayCurrency !== b.subscription.currency
-                ? convertMinor(b.amountMinor, b.subscription.currency, displayCurrency, rates) ===
-                  null
+              {displayCurrency && displayCurrency !== b.currency
+                ? convertMinor(b.amountMinor, b.currency, displayCurrency, rates) === null
                   ? '待换算'
-                  : `≈ ${formatMoney(Math.round(convertMinor(b.amountMinor, b.subscription.currency, displayCurrency, rates)!), displayCurrency)}`
-                : formatMoney(b.amountMinor, b.subscription.currency)}
+                  : `≈ ${formatMoney(Math.round(convertMinor(b.amountMinor, b.currency, displayCurrency, rates)!), displayCurrency)}`
+                : formatMoney(b.amountMinor, b.currency)}
             </strong>
             <small>
-              {displayCurrency && displayCurrency !== b.subscription.currency
-                ? `原币 ${formatMoney(b.amountMinor, b.subscription.currency)}`
+              {displayCurrency && displayCurrency !== b.currency
+                ? `原币 ${formatMoney(b.amountMinor, b.currency)}`
                 : cycleLabel(b.subscription)}
             </small>
           </span>
@@ -231,6 +235,10 @@ export function App() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [archiveId, setArchiveId] = useState<string | null>(null)
   const [allAttention, setAllAttention] = useState(false)
+  const [billTarget, setBillTarget] = useState<BillTarget | null>(null)
+  const [priceTarget, setPriceTarget] = useState<Subscription | null>(null)
+  const [allPending, setAllPending] = useState(false)
+  const [categoryMode, setCategoryMode] = useState('forecast')
   const navigationSequence = useRef(0)
 
   const reload = useCallback(async () => {
@@ -250,8 +258,18 @@ export function App() {
   }, [chooseCurrency])
   useEffect(() => {
     void reload().catch((e) => setError(String(e.message)))
-    const timer = setInterval(() => setToday(localDate()), 30_000)
-    return () => clearInterval(timer)
+    const timer = setInterval(() => {
+      setToday(localDate())
+      void reload().catch(() => {})
+    }, 30_000)
+    const focus = () => {
+      void reload().catch(() => {})
+    }
+    window.addEventListener('focus', focus)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', focus)
+    }
   }, [reload])
   useEffect(() => {
     const navigate = (action: DesktopAction) => {
@@ -301,10 +319,26 @@ export function App() {
     }
   }
   const data = snapshot?.subscriptions || []
+  const records = snapshot?.bills || []
+  const prices = snapshot?.prices || []
   const rates = snapshot?.exchangeRates ?? null
-  const needsExchange = data.some(
-    (s) => isRenewing(s) && s.currency !== currency && s.amountMinor > 0
-  )
+  const needsExchange =
+    data.some(
+      (s) =>
+        isRenewing(s) &&
+        ((s.currency !== currency && s.amountMinor > 0) ||
+          prices.some(
+            (p) =>
+              p.subscriptionId === s.id &&
+              p.currency !== currency &&
+              p.amountMinor > 0 &&
+              p.effectiveOn >= today
+          ))
+    ) ||
+    records.some(
+      (b) =>
+        b.status === 'pending' && b.due >= today && b.currency !== currency && b.amountMinor > 0
+    )
   const refreshRates = useCallback(async (force = false) => {
     if (ratesPending.current) return
     ratesPending.current = true
@@ -352,7 +386,16 @@ export function App() {
   )
 
   function overview() {
-    const summary = totals(data, currency, today, rates)
+    const summary = totals(data, currency, today, rates, prices, records)
+    const actual = actualTotals(
+      records,
+      currency,
+      today.slice(0, 7) + '-01',
+      today.slice(0, 7) + '-31'
+    )
+    const pending = records.filter((b) => b.status === 'pending')
+    const categorySummary =
+      categoryMode === 'actual' ? { monthly: actual.total, categories: actual.categories } : summary
     const current = data.filter((s) => s.status !== 'archived')
     const paused = current.filter((s) => !s.autoRenew).length
     const money = (amount: number | null) => (amount === null ? '—' : formatMoney(amount, currency))
@@ -422,19 +465,21 @@ export function App() {
         <div className="stats">
           <div className="stat featured">
             <div className="stat-heading">
-              <span>月均费用</span>
-              <small>全部币种 · 参考估算</small>
+              <span>本月实际支出</span>
+              <small>
+                {actual.count} 笔已支付 · {currency}
+              </small>
             </div>
-            <strong>{money(summary.monthly)}</strong>
+            <strong>{money(actual.total)}</strong>
           </div>
           <div className="stat">
             <div className="stat-heading">
-              <span>年度折算费用</span>
-              <small>
-                {summary.count} 项自动续费 · {currency}
+              <span>月均订阅费用</span>
+              <small title={`年度折算费用 ${money(summary.annual)}`}>
+                年度折算 {money(summary.annual)}
               </small>
             </div>
-            <strong>{money(summary.annual)}</strong>
+            <strong>{money(summary.monthly)}</strong>
           </div>
           <div className="stat">
             <div className="stat-heading">
@@ -446,6 +491,33 @@ export function App() {
             <strong>{money(summary.upcoming)}</strong>
           </div>
         </div>
+        {actual.missing > 0 && (
+          <div className="exchange-notice" role="status">
+            本月有 {actual.missing}{' '}
+            笔已支付账单缺少汇率快照，完整实际支出暂不可用。可编辑支付记录填写实际扣款币种及金额。
+          </div>
+        )}
+        {pending.length > 0 && (
+          <Panel
+            title="待确认账单"
+            className="spaced pending-panel"
+            extra={
+              <button className="text-button" onClick={() => setAllPending(!allPending)}>
+                {allPending
+                  ? '收起'
+                  : `共 ${pending.length} 笔${pending.length > 3 ? ' · 查看全部' : ''}`}
+              </button>
+            }
+          >
+            <RecordRows
+              bills={allPending ? pending : pending.slice(0, 3)}
+              subscriptions={data}
+              onEdit={editBill}
+              onStatus={updateBillStatus}
+              busy={busy}
+            />
+          </Panel>
+        )}
         {attention.length > 0 && (
           <Panel
             title="需要关注"
@@ -510,9 +582,22 @@ export function App() {
               </Empty>
             )}
           </Panel>
-          <Panel title="钱花在哪儿" extra={<span className="muted small">月均 · {currency}</span>}>
-            {summary.monthly !== null &&
-              summary.categories.map(({ category: c, amount }) => {
+          <Panel
+            title="钱花在哪儿"
+            extra={
+              <SelectField
+                label="分类支出口径"
+                value={categoryMode}
+                onChange={setCategoryMode}
+                options={[
+                  { value: 'forecast', label: '月均预计' },
+                  { value: 'actual', label: '本月实际' }
+                ]}
+              />
+            }
+          >
+            {categorySummary.monthly !== null &&
+              categorySummary.categories.map(({ category: c, amount }) => {
                 return (
                   amount !== null &&
                   amount > 0 && (
@@ -524,7 +609,7 @@ export function App() {
                       <div className="bar-track">
                         <div
                           style={{
-                            width: `${Math.min(100, (amount / Math.max(1, summary.monthly!)) * 100)}%`
+                            width: `${Math.min(100, (amount / Math.max(1, categorySummary.monthly!)) * 100)}%`
                           }}
                         />
                       </div>
@@ -532,17 +617,27 @@ export function App() {
                   )
                 )
               })}
-            {!summary.monthly && (
+            {!categorySummary.monthly && (
               <Empty>
-                {summary.monthly === null
+                {categorySummary.monthly === null
                   ? '补齐汇率后显示完整分类支出。'
-                  : summary.count
-                    ? '当前续费订阅金额为 0，暂无分类支出。'
-                    : emptyReason}
+                  : categoryMode === 'actual'
+                    ? '本月暂无已确认的实际支出。'
+                    : summary.count
+                      ? '当前续费订阅金额为 0，暂无分类支出。'
+                      : emptyReason}
               </Empty>
             )}
           </Panel>
         </div>
+        <Panel
+          title="近 6 个月实际支出"
+          className="spaced"
+          help="按实际支付日期统计，仅计入已确认支付的账单。缺少记录的月份不推断为零支出。"
+          extra={<span className="small muted">{currency}</span>}
+        >
+          <SpendingTrend bills={records} currency={currency} today={today} />
+        </Panel>
       </>
     )
   }
@@ -593,7 +688,13 @@ export function App() {
         </div>
         <div className="subscription-list">
           {visible.map((s) => {
-            const next = nextBills(s, today, 1)[0]
+            const start = records.some(
+              (b) =>
+                b.subscriptionId === s.id && b.due === today && !b.manual && b.status !== 'pending'
+            )
+              ? addDays(today, 1)
+              : today
+            const next = nextBills(s, start, 1, prices)[0]
             return (
               <button
                 className="subscription-row"
@@ -637,7 +738,16 @@ export function App() {
     )
   }
   function detail(s: Subscription, from: MainPage) {
-    const bills = nextBills(s, today),
+    const bills = nextBills(
+        s,
+        records.some(
+          (b) => b.subscriptionId === s.id && b.due === today && !b.manual && b.status !== 'pending'
+        )
+          ? addDays(today, 1)
+          : today,
+        3,
+        prices
+      ),
       next = bills[0]
     return (
       <>
@@ -659,7 +769,14 @@ export function App() {
           </button>
         </header>
         <div className="detail-grid">
-          <Panel title="费用与周期">
+          <Panel
+            title="费用与周期"
+            extra={
+              <button className="text-button" onClick={() => setPriceTarget(s)}>
+                调整价格
+              </button>
+            }
+          >
             <div className="detail-price">
               {formatMoney(s.amountMinor, s.currency)}
               <small> / {cycleLabel(s).slice(1)}</small>
@@ -706,7 +823,7 @@ export function App() {
               )}
               <div>
                 <dt>下次预计金额</dt>
-                <dd>{next ? formatMoney(next.amountMinor, s.currency) : '—'}</dd>
+                <dd>{next ? formatMoney(next.amountMinor, next.currency) : '—'}</dd>
               </div>
               <div>
                 <dt>提醒时间</dt>
@@ -719,29 +836,39 @@ export function App() {
             </dl>
           </Panel>
         </div>
-        <Panel
-          title="接下来三期"
-          extra={<span className="small muted">预计扣款</span>}
-          className="spaced"
-        >
-          {bills.length ? (
-            bills.map((bill, i) => (
-              <div className="schedule-row" key={bill.due}>
-                <span>
-                  {formatDate(bill.due)}
-                  <small>
-                    {i === 0 && s.status === 'trial' && bill.due === s.anchorDate
-                      ? '试用结束后首笔扣款'
-                      : '订阅续费'}
-                  </small>
-                </span>
-                <strong>{formatMoney(bill.amountMinor, s.currency)}</strong>
-              </div>
-            ))
-          ) : (
-            <Empty>没有后续扣款计划。</Empty>
-          )}
-        </Panel>
+        <LedgerHistory
+          key={s.id}
+          schedule={
+            <>
+              {bills.length ? (
+                bills.map((bill, i) => (
+                  <div className="schedule-row" key={bill.due}>
+                    <span>
+                      {formatDate(bill.due)}
+                      <small>
+                        {i === 0 && s.status === 'trial' && bill.due === s.anchorDate
+                          ? '试用结束后首笔扣款'
+                          : '订阅续费'}
+                      </small>
+                    </span>
+                    <strong>{formatMoney(bill.amountMinor, bill.currency)}</strong>
+                  </div>
+                ))
+              ) : (
+                <Empty>没有后续扣款计划。</Empty>
+              )}
+            </>
+          }
+          subscription={s}
+          bills={records.filter((b) => b.subscriptionId === s.id)}
+          prices={prices.filter((p) => p.subscriptionId === s.id)}
+          changes={(snapshot?.changes || []).filter((c) => c.subscriptionId === s.id)}
+          onEdit={editBill}
+          onStatus={updateBillStatus}
+          onAdd={() => setBillTarget({ subscription: s })}
+          onPrice={() => setPriceTarget(s)}
+          busy={busy}
+        />
         {(s.notes || s.website) && (
           <Panel title="补充信息" className="spaced">
             {s.notes && <p className="notes">{s.notes}</p>}
@@ -774,7 +901,7 @@ export function App() {
           <div className="confirmation" role="alert">
             <div>
               <strong>将「{s.name}」移入归档？</strong>
-              <p>记录会保留，并从费用统计和扣款计划中移除。服务商处的实际续费需另行取消。</p>
+              <p>历史账单和实际支出会保留，后续预计扣款将停止。服务商处的实际续费需另行取消。</p>
             </div>
             <button className="secondary" disabled={busy} onClick={() => setArchiveId(null)}>
               保留
@@ -805,7 +932,7 @@ export function App() {
       end = `${month}-${days}`
     const offset = (new Date(first + 'T00:00:00Z').getUTCDay() + 6) % 7
     const currency = calendarCurrency
-    const bills = forecast(data, first, end, currency),
+    const bills = calendarBills(data, records, prices, first, end, currency),
       shown = selectedDate ? bills.filter((b) => b.due === selectedDate) : bills
     function shift(delta: number) {
       const date = new Date(Date.UTC(year, number - 1 + delta, 1))
@@ -817,7 +944,7 @@ export function App() {
         <header className="page-head">
           <div>
             <h1>扣款日历</h1>
-            <p>提前看见每一笔计划中的支出</p>
+            <p>查看预计扣款与账单确认状态</p>
           </div>
           <label className="currency-picker">
             <span>筛选币种</span>
@@ -878,7 +1005,9 @@ export function App() {
                   const date = `${month}-${String(i + 1).padStart(2, '0')}`,
                     items = bills.filter((b) => b.due === date),
                     amount = formatMoney(
-                      items.reduce((n, b) => n + b.amountMinor, 0),
+                      items
+                        .filter((b) => b.status !== 'skipped')
+                        .reduce((n, b) => n + b.amountMinor, 0),
                       currency
                     )
                   return (
@@ -887,20 +1016,44 @@ export function App() {
                       className={`day ${date === today ? 'today' : ''} ${items.length ? 'has-bills' : ''}`}
                       aria-pressed={selectedDate === date}
                       aria-current={date === today ? 'date' : undefined}
-                      aria-label={`${date}，${items.length}笔预计扣款${items.length ? `，合计${amount}` : ''}`}
-                      title={
-                        items.length ? `${items.length}笔预计扣款 · ${amount}` : '暂无预计扣款'
-                      }
+                      aria-label={`${date}，${items.length}笔扣款${items.length ? `，合计${amount}` : ''}`}
+                      title={items.length ? `${items.length}笔扣款 · ${amount}` : '暂无预计扣款'}
                       onClick={() => setSelectedDate(selectedDate === date ? null : date)}
                     >
                       <span className="day-number">
                         {i + 1}
-                        {items.length > 0 && <i className="bill-dot" aria-hidden="true" />}
+                        {items.length > 0 && (
+                          <span className="day-statuses" aria-hidden="true">
+                            {[...new Set(items.map((b) => b.status || 'forecast'))].map(
+                              (status) => (
+                                <i key={status} className={`status-dot ${status}`} />
+                              )
+                            )}
+                          </span>
+                        )}
                       </span>
                       {items.length > 0 && <strong>{amount}</strong>}
                     </button>
                   )
                 })}
+              </div>
+              <div className="calendar-legend">
+                <span>
+                  <i className="status-dot" />
+                  预计
+                </span>
+                <span>
+                  <i className="status-dot pending" />
+                  待确认
+                </span>
+                <span>
+                  <i className="status-dot paid" />
+                  已支付
+                </span>
+                <span>
+                  <i className="status-dot skipped" />
+                  已跳过（不计入合计）
+                </span>
               </div>
             </section>
             <Panel
@@ -910,7 +1063,9 @@ export function App() {
                 <span className="small muted">
                   合计{' '}
                   {formatMoney(
-                    shown.reduce((n, b) => n + b.amountMinor, 0),
+                    shown
+                      .filter((b) => b.status !== 'skipped')
+                      .reduce((n, b) => n + b.amountMinor, 0),
                     currency
                   )}
                 </span>
@@ -934,6 +1089,19 @@ export function App() {
         </div>
       </>
     )
+  }
+  function editBill(bill: BillRecord) {
+    const subscription = data.find((s) => s.id === bill.subscriptionId)
+    if (subscription) setBillTarget({ subscription, bill })
+  }
+  function updateBillStatus(bill: BillRecord, status: 'pending' | 'skipped') {
+    void perform(async () => {
+      unwrap(
+        await window.desktop.updateBill({ id: bill.id, expectedUpdatedAt: bill.updatedAt, status })
+      )
+      await reload()
+      setNotice(status === 'pending' ? '账单已恢复为待确认。' : '已跳过本期账单。')
+    })
   }
   function settings() {
     return <SettingsPage snapshot={snapshot!} onReload={reload} onNotice={setNotice} />
@@ -1054,6 +1222,27 @@ export function App() {
               }
             />
           )}
+          {billTarget && (
+            <BillEditor
+              key={billTarget.bill?.id || billTarget.subscription.id}
+              target={billTarget}
+              onClose={() => setBillTarget(null)}
+              onSaved={async () => {
+                await reload()
+                setNotice('账单已保存。')
+              }}
+            />
+          )}
+          {priceTarget && (
+            <PriceEditor
+              subscription={priceTarget}
+              onClose={() => setPriceTarget(null)}
+              onSaved={async () => {
+                await reload()
+                setNotice('价格计划已保存。')
+              }}
+            />
+          )}
           {notice && (
             <div className="toast" role="status">
               <Check size={16} />
@@ -1099,7 +1288,7 @@ function SubscriptionForm({
     event.preventDefault()
     if (busy || pickingIcon) return
     const values = new FormData(event.currentTarget)
-    const amountMinor = parseAmount(String(values.get('amount')))
+    const amountMinor = s ? s.amountMinor : parseAmount(String(values.get('amount')))
     if (amountMinor === null) {
       setError('金额请填写最多两位小数，范围为 0—9,999,999.99。')
       return
@@ -1109,7 +1298,7 @@ function SubscriptionForm({
       icon,
       category: values.get('category'),
       amountMinor,
-      currency: values.get('currency'),
+      currency: s?.currency || values.get('currency'),
       cycle: values.get('cycle'),
       interval: Number(values.get('interval')),
       anchorDate: values.get('anchorDate'),
@@ -1191,7 +1380,7 @@ function SubscriptionForm({
               <InputNumber<string>
                 name="amount"
                 aria-label="金额"
-                disabled={busy}
+                disabled={busy || !!s}
                 inputMode="decimal"
                 stringMode
                 controls={false}
@@ -1211,7 +1400,7 @@ function SubscriptionForm({
                 label="币种"
                 name="currency"
                 defaultValue={s?.currency || 'CNY'}
-                disabled={busy}
+                disabled={busy || !!s}
                 options={currencies.map((c) => ({ value: c, label: currencyNames[c] }))}
               />
             </label>
@@ -1324,6 +1513,11 @@ function SubscriptionForm({
               />
             </label>
           </div>
+          {s && (
+            <p className="footnote">
+              金额与币种请在订阅详情中使用“调整价格”，可设置生效日期并保留历史价格。
+            </p>
+          )}
           <label className="check-row">
             <Switch
               aria-label="自动续费"

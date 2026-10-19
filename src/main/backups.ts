@@ -217,6 +217,9 @@ export class BackupService {
     })
     return {
       token,
+      bills: backup.version === 2 ? backup.bills.length : 0,
+      prices: backup.version === 2 ? backup.prices.length : 0,
+      legacy: backup.version === 1,
       source,
       exportedAt: backup.exportedAt,
       count: backup.subscriptions.length,

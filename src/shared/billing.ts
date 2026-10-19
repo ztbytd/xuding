@@ -1,4 +1,6 @@
 import type { Bill, Currency, Subscription } from './model'
+import { priceAt } from './ledger-model'
+import type { BillRecord, Price } from './ledger-model'
 import { categories } from './model'
 import { convertMinor } from './exchange'
 import type { ExchangeRates } from './exchange'
@@ -22,7 +24,13 @@ function periodMonths(s: Subscription): number {
 }
 
 /** Compute every occurrence from the original anchor, never from a clamped previous month. */
-export function occurrences(s: Subscription, start: string, end: string, limit = 1000): Bill[] {
+export function occurrences(
+  s: Subscription,
+  start: string,
+  end: string,
+  limit = 1000,
+  prices: Price[] = []
+): Bill[] {
   if (!isRenewing(s) || start > end || end < s.anchorDate) return []
   const [year, month, day] = s.anchorDate.split('-').map(Number)
   const [fromYear, fromMonth] = start.split('-').map(Number)
@@ -40,22 +48,23 @@ export function occurrences(s: Subscription, start: string, end: string, limit =
       .toISOString()
       .slice(0, 10)
     if (due > end) break
-    if (due >= start) bills.push({ subscription: s, due, amountMinor: s.amountMinor })
+    if (due >= start) bills.push({ subscription: s, due, ...priceAt(s, due, prices) })
   }
   return bills
 }
-export function nextBills(s: Subscription, start: string, count = 3): Bill[] {
-  return occurrences(s, start, '2199-12-31', count)
+export function nextBills(s: Subscription, start: string, count = 3, prices: Price[] = []): Bill[] {
+  return occurrences(s, start, '2100-12-31', count, prices)
 }
 export function forecast(
   subscriptions: Subscription[],
   start: string,
   end: string,
-  currency?: Currency
+  currency?: Currency,
+  prices: Price[] = []
 ): Bill[] {
   return subscriptions
-    .filter((s) => !currency || s.currency === currency)
-    .flatMap((s) => occurrences(s, start, end))
+    .flatMap((s) => occurrences(s, start, end, 2000, prices))
+    .filter((b) => !currency || b.currency === currency)
     .sort(
       (a, b) =>
         a.due.localeCompare(b.due) ||
@@ -69,9 +78,13 @@ export function totals(
   subscriptions: Subscription[],
   currency: Currency,
   today: string,
-  rates: ExchangeRates | null = null
+  rates: ExchangeRates | null = null,
+  prices: Price[] = [],
+  records: BillRecord[] = []
 ) {
-  const selected = subscriptions.filter(isRenewing)
+  const selected = subscriptions
+    .filter(isRenewing)
+    .map((s) => ({ ...s, ...priceAt(s, today, prices) }))
   const missing = [
     ...new Set(
       selected
@@ -86,17 +99,31 @@ export function totals(
   const monthly = sum(
     selected.map((s) => convertMinor(monthlyMinor(s), s.currency, currency, rates))
   )
-  const bills = forecast(selected, today, addDays(today, 29))
-  const upcoming = sum(
-    bills.map((b) => convertMinor(b.amountMinor, b.subscription.currency, currency, rates))
-  )
+  const bills = forecast(selected, today, addDays(today, 29), undefined, prices).flatMap((b) => {
+    const record = records.find(
+      (r) => r.subscriptionId === b.subscription.id && r.due === b.due && !r.manual
+    )
+    return record
+      ? record.status === 'pending'
+        ? [{ ...b, amountMinor: record.amountMinor, currency: record.currency }]
+        : []
+      : [b]
+  })
+  const upcoming = sum(bills.map((b) => convertMinor(b.amountMinor, b.currency, currency, rates)))
   return {
     monthly: monthly === null ? null : Math.round(monthly),
     annual: monthly === null ? null : Math.round(monthly * 12),
     upcoming: upcoming === null ? null : Math.round(upcoming),
     count: selected.length,
     bills,
-    missing,
+    missing: [
+      ...new Set([
+        ...missing,
+        ...bills
+          .filter((b) => convertMinor(b.amountMinor, b.currency, currency, rates) === null)
+          .map((b) => b.currency)
+      ])
+    ],
     categories: categories.map((category) => {
       const amount = sum(
         selected

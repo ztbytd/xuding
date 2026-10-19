@@ -21,6 +21,7 @@ import { ExchangeService } from './exchange'
 import { BackupService } from './backups'
 import { DesktopLifecycle } from './desktop'
 import { settingsPatchSchema, settingsSchema, subscriptionInputSchema } from '../shared/model'
+import { billInputSchema, billUpdateSchema } from '../shared/ledger-model'
 import { channels } from '../shared/channels'
 import type { Result, DesktopAction } from '../shared/model'
 import { localDate } from '../shared/billing'
@@ -99,14 +100,39 @@ function registerApi(): void {
     })
     return 'data:image/png;base64,' + normalized.toPNG().toString('base64')
   })
-  handle(channels.load, () => ({
-    subscriptions: repository.list(),
-    settings: repository.settings(),
-    exchangeRates: repository.exchangeRates(),
-    version: app.getVersion(),
-    backupStatus: backups.status(),
-    startupSupported: desktop.startupSupported
-  }))
+  handle(channels.updateBill, async (raw) => {
+    const input = billUpdateSchema.parse(raw)
+    const rates =
+      input.status === 'paid' ? (await exchange.get()).table : repository.exchangeRates()
+    const bill = repository.ledger.updateBill(input, rates)
+    backups.changed()
+    return bill
+  })
+  handle(channels.addBill, async (raw) => {
+    const input = billInputSchema.parse(raw)
+    const rates = (await exchange.get()).table
+    const bill = repository.ledger.addBill(input, rates)
+    backups.changed()
+    return bill
+  })
+  handle(channels.changePrice, (input) => {
+    repository.ledger.changePrice(input)
+    backups.changed()
+  })
+  handle(channels.load, () => {
+    if (repository.ledger.sync()) backups.changed()
+    return {
+      bills: repository.ledger.bills(),
+      prices: repository.ledger.prices(),
+      changes: repository.ledger.changes(),
+      subscriptions: repository.list(),
+      settings: repository.settings(),
+      exchangeRates: repository.exchangeRates(),
+      version: app.getVersion(),
+      backupStatus: backups.status(),
+      startupSupported: desktop.startupSupported
+    }
+  })
   handle(channels.save, (raw, id) => {
     const item = repository.save(
       subscriptionInputSchema.parse(raw),
@@ -177,6 +203,7 @@ function registerApi(): void {
   })
 }
 function checkReminders(): void {
+  if (repository.ledger.sync()) backups.changed()
   if (!repository.settings().notificationsEnabled || !Notification.isSupported()) return
   for (const candidate of reminderCandidates(repository.list(), localDate())) {
     const key = candidate.key

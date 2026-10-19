@@ -55,7 +55,7 @@ test('compact calendar filters bills and adapts to window width', async ({}, tes
       animations: 'disabled'
     })
     const day = page.getByRole('button', {
-      name: '2026-10-19，2笔预计扣款，合计¥49.00',
+      name: '2026-10-19，2笔扣款，合计¥49.00',
       exact: true
     })
     await day.click()
@@ -67,7 +67,7 @@ test('compact calendar filters bills and adapts to window width', async ({}, tes
     await expect(day).toHaveAttribute('aria-pressed', 'true')
     await page.getByRole('button', { name: '查看整月计划', exact: true }).click()
     await expect(details.locator('.subscription-row')).toHaveCount(3)
-    await page.getByRole('button', { name: '2026-10-01，0笔预计扣款', exact: true }).click()
+    await page.getByRole('button', { name: '2026-10-01，0笔扣款', exact: true }).click()
     await expect(details).toContainText('所选日期没有预计扣款。')
     await page.getByRole('button', { name: '下个月', exact: true }).click()
     await expect(details.getByRole('heading', { name: '本月扣款计划' })).toBeVisible()
