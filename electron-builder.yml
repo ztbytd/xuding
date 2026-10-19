@@ -1,0 +1,23 @@
+appId: io.github.ztbytd.xuding
+productName: 续订
+directories:
+  output: release
+files:
+  - out/**/*
+  - package.json
+asar: true
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
+npmRebuild: false
+win:
+  icon: resources/icon.ico
+  executableName: xuding
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  artifactName: xuding-${version}-windows-${arch}-setup.${ext}
