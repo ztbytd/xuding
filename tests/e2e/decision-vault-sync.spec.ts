@@ -1,10 +1,10 @@
 import { test, expect, _electron as electron } from '@playwright/test'
 import type { Page } from '@playwright/test'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, copyFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 test('decisions, encryption, lock/restart and two desktop instances synchronize securely', async ({}, testInfo) => {
   test.setTimeout(180000)
@@ -120,8 +120,24 @@ test('decisions, encryption, lock/restart and two desktop instances synchronize 
     await page
       .getByRole('textbox', { name: '恢复密钥最后八位', exact: true })
       .fill(recovery.slice(-8))
+    await a.evaluate(() => {
+      const filesystem = process.getBuiltinModule('fs').promises,
+        original = filesystem.copyFile
+      filesystem.copyFile = async (...args) => {
+        if (String(args[1]).endsWith('.encrypted-next'))
+          await new Promise((resolve) => setTimeout(resolve, 1500))
+        return original(...args)
+      }
+      ;(globalThis as unknown as { restoreCipherCopy: () => void }).restoreCipherCopy = () => {
+        filesystem.copyFile = original
+      }
+    })
     await page.getByRole('button', { name: '确认启用加密', exact: true }).click()
     await expect(page.getByRole('dialog', { name: '启用本地加密', exact: true })).toBeHidden()
+    await a.evaluate(() =>
+      (globalThis as unknown as { restoreCipherCopy: () => void }).restoreCipherCopy()
+    )
+    await expect(page.getByRole('heading', { name: '设置与备份', exact: true })).toBeVisible()
     await expect(page.getByText('已加密', { exact: true })).toBeVisible()
     const opts = await page.evaluate(() =>
       window.desktop.securityAction({
@@ -237,5 +253,60 @@ test('decisions, encryption, lock/restart and two desktop instances synchronize 
     await b?.close()
     await a.close()
     await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+test('an authenticated password opens encrypted recovery points when the main ledger is damaged', async () => {
+  test.setTimeout(90000)
+  const directory = await mkdtemp(join(tmpdir(), 'xuding-v08-recovery-')),
+    { ELECTRON_RUN_AS_NODE: _, ...env } = process.env
+  const launch = () => electron.launch({ args: ['.'], env: { ...env, XUDING_DATA_DIR: directory } })
+  let app = await launch()
+  try {
+    let page = await app.firstWindow()
+    await page.getByRole('heading', { name: '每一笔订阅，心里有数。' }).waitFor()
+    const prepared = await page.evaluate(() =>
+      window.desktop.securityAction({
+        action: 'prepare',
+        password: 'Recovery fixture password 2026',
+        options: {
+          idleMinutes: 0,
+          lockOnScreen: true,
+          lockOnSuspend: true,
+          remember: false,
+          showNotificationDetails: false
+        }
+      })
+    )
+    if (!prepared.ok) throw new Error(prepared.error)
+    const enabled = await page.evaluate(
+      (confirmation) => window.desktop.securityAction({ action: 'enable', confirmation }),
+      prepared.data.recoveryKey!.slice(-8)
+    )
+    if (!enabled.ok) throw new Error(enabled.error)
+    const snapshot = await page.evaluate(() => window.desktop.load())
+    if (!snapshot.ok) throw new Error(snapshot.error)
+    await app.close()
+    const point = `upgrade-${snapshot.data.version}-${Date.now()}-${randomUUID()}.db`
+    await copyFile(join(directory, 'xuding.db'), join(directory, point))
+    await writeFile(join(directory, 'xuding.db'), 'damaged encrypted database')
+    app = await launch()
+    page = await app.firstWindow()
+    await page.getByRole('heading', { name: '解锁续订', exact: true }).waitFor()
+    await page
+      .getByRole('textbox', { name: '输入解锁密码', exact: true })
+      .fill('Recovery fixture password 2026')
+    await page.getByRole('button', { name: '解锁账本', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '恢复续订账本', exact: true })).toBeVisible({
+      timeout: 15000
+    })
+    const recovery = await page.evaluate(() => window.desktop.recoveryStatus())
+    expect(recovery.ok && recovery.data.active).toBe(true)
+    expect(recovery.ok && recovery.data.entries.some((p) => p.id === point && p.valid)).toBe(true)
+    await expect(
+      page.getByRole('button', { name: '恢复并重启', exact: true }).first()
+    ).toBeEnabled()
+  } finally {
+    await app.close()
   }
 })

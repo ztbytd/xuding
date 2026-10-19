@@ -12,7 +12,7 @@ export function Startup() {
     void window.desktop
       .securityStatus()
       .then((r) => {
-        if (r.ok) setSecurity(r.data)
+        if (r.ok && !r.data.busy) setSecurity(r.data)
       })
       .catch(() => {})
   useEffect(() => {
@@ -49,6 +49,7 @@ export function Startup() {
     return (
       <UnlockPage
         onUnlocked={() => {
+          setState(null)
           refreshSecurity()
           void window.desktop.recoveryStatus().then((r) => r.ok && setState(r.data))
         }}

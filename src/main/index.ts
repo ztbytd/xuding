@@ -680,7 +680,7 @@ async function lockLedger(): Promise<void> {
   }
 }
 function registerSecurity(): void {
-  handle(channels.securityStatus, () => localVault.status())
+  handle(channels.securityStatus, () => ({ ...localVault.status(), busy: securityBusy }))
   handle(channels.securityAction, async (raw) => {
     const input = securityActionSchema.parse(raw)
     if (securityBusy) throw new Error('正在处理安全设置，请稍后重试。')

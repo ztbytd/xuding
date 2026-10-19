@@ -39,6 +39,7 @@ export const securityActionSchema = z.discriminatedUnion('action', [
 ])
 export type SecurityAction = z.infer<typeof securityActionSchema>
 export type SecurityStatus = {
+  busy?: boolean
   enabled: boolean
   locked: boolean
   options: SecurityOptions

@@ -83,6 +83,32 @@ describe('encrypted local ledgers', { timeout: 30_000 }, () => {
     await expect(restarted.unlock(prepared.recoveryKey!, true)).rejects.toThrow()
     await restarted.unlock(key, true)
   })
+  it('authenticates a damaged ledger and restores an encrypted recovery point', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'xuding-vault-damaged-')),
+      file = join(dir, 'xuding.db')
+    const repo = new SubscriptionRepository(file, clock)
+    repo.save(input)
+    repo.close()
+    const vault = new LocalVault(dir),
+      prepared = await vault.prepare(password, options)
+    await vault.enable(prepared.recoveryKey!.slice(-8))
+    const recovery = new RecoveryService(
+        dir,
+        '0.8.0',
+        () => vault.key,
+        () => vault.keys
+      ),
+      point = recovery.checkpointNow()
+    vault.lock()
+    await writeFile(file, 'damaged database')
+    await expect(vault.unlock('incorrect password')).rejects.toThrow()
+    await vault.unlock(password)
+    expect((await recovery.entries()).find((p) => p.id === point)?.valid).toBe(true)
+    await recovery.restore(point)
+    const restored = new SubscriptionRepository(file, clock, vault.key)
+    expect(restored.list()[0].name).toBe(input.name)
+    restored.close()
+  })
   it('refuses an unsafe migration destination without touching the live ledger', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'xuding-vault-interruption-')),
       file = join(dir, 'xuding.db')

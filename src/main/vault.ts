@@ -155,15 +155,22 @@ export class LocalVault {
         await this.resumeMigration(key)
         await this.persist({ ...this.config, state: 'ready' })
       }
-      this.verify(this.database, key)
+      // Authentication belongs to the key envelope. A damaged main database must not
+      // prevent using the authenticated key to inspect encrypted recovery points.
+      let liveValid = false
+      try {
+        this.verify(this.database, key)
+        liveValid = true
+      } catch {}
       this.dataKey?.fill(0)
       this.dataKey = key
       key = undefined
       this.failed = 0
       for (const old of this.retainedKeys) old.fill(0)
       this.retainedKeys = this.config.previous.map((p) => unseal(p, this.dataKey!, 'previous-key'))
-      if (existsSync(this.database + '.encryption-original')) await this.finishMigration()
-      else if (existsSync(this.database + '.encrypted-next')) {
+      if (liveValid && existsSync(this.database + '.encryption-original'))
+        await this.finishMigration()
+      else if (liveValid && existsSync(this.database + '.encrypted-next')) {
         const file = this.database + '.encrypted-next',
           info = await lstat(file)
         if (info.isFile() && !info.isSymbolicLink()) await unlink(file)

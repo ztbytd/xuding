@@ -57,3 +57,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Published artifacts failed verification; draft retained' }
           gh release edit $tag --draft=false --latest
           if ($LASTEXITCODE -ne 0) { throw 'Failed to publish release' }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: release-test-diagnostics
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
