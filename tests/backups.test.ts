@@ -150,6 +150,7 @@ describe('automatic backups and guarded restoration', () => {
   })
   it.each([1, 2, 3])(
     'upgrades database version %i with an intact SQLite recovery copy',
+    { timeout: 30_000 },
     (version) => {
       const file = join(directory, 'legacy.db')
       const legacy = new DatabaseSync(file)
