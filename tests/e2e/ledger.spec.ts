@@ -124,6 +124,7 @@ test('records payments, prices, calendar states and restores complete billing hi
     await go('设置与备份')
     await page.getByRole('tab', { name: '数据与备份', exact: true }).click()
     await page.getByRole('button', { name: '立即备份', exact: true }).click()
+    await expect(page.getByText('备份已完成。', { exact: true })).toBeVisible()
     const state = await page.evaluate(() => window.desktop.load())
     if (!state.ok) throw new Error(state.error)
     const files = await page.evaluate(() => window.desktop.backupHistory())
