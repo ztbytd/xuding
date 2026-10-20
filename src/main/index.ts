@@ -58,7 +58,8 @@ if (process.env.XUDING_DATA_DIR && isAbsolute(process.env.XUDING_DATA_DIR)) {
   mkdirSync(process.env.XUDING_DATA_DIR, { recursive: true })
   app.setPath('userData', process.env.XUDING_DATA_DIR)
 }
-app.setAppUserModelId('io.github.ztbytd.xuding')
+const APP_ID = 'io.github.ztbytd.xuding'
+app.setAppUserModelId(APP_ID)
 let window: BrowserWindow | null = null
 let repository: SubscriptionRepository
 let exchange: ExchangeService
@@ -609,6 +610,19 @@ function createWindow(): void {
       webSecurity: true
     }
   })
+  if (process.platform === 'win32') {
+    window.setAppDetails({
+      appId: APP_ID,
+      appIconPath: app.isPackaged
+        ? join(process.resourcesPath, 'icon.ico')
+        : join(app.getAppPath(), 'resources/icon.ico'),
+      appIconIndex: 0,
+      relaunchCommand: app.isPackaged
+        ? `"${process.execPath}"`
+        : `"${process.execPath}" "${app.getAppPath()}"`,
+      relaunchDisplayName: '续订'
+    })
+  }
   Menu.setApplicationMenu(null)
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('did-start-loading', () => {
