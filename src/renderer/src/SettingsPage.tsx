@@ -427,7 +427,6 @@ export function SettingsPage({
                   {protection.enabled ? '更改备份密码' : '设置备份密码'}
                 </Button>
               </div>
-              <p className="footnote">旧备份仍使用原密码。备份密码遗失后无法找回。</p>
             </Region>
             <Region title="账本文件">
               {row(
