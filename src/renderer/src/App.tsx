@@ -1,4 +1,5 @@
 import { DecisionPanel } from './Decisions'
+import appIcon from '../../../resources/icon.png'
 import { CommandMenu } from './CommandMenu'
 import { ChangeSummary } from './ChangeSummary'
 import { decisionAttention, usageSummary } from '../../shared/decisions'
@@ -22,7 +23,6 @@ import {
   LayoutDashboard,
   Pencil,
   Plus,
-  Repeat2,
   RefreshCw,
   Search,
   Settings as SettingsIcon,
@@ -1356,7 +1356,7 @@ export function App() {
           </button>
           <div className="brand">
             <span className="brand-mark" aria-hidden="true">
-              <Repeat2 size={18} />
+              <img src={appIcon} alt="" draggable={false} />
             </span>
             <span className="brand-name">续订</span>
           </div>

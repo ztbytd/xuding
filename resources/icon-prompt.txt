@@ -1,0 +1,12 @@
+Xuding icon — continuous subscription card ribbon
+Created with the built-in image generation tool.
+Master: icon-master.png; runtime: icon.png; Windows multi-size icon: icon.ico.
+PNG resizing and ICO encoding preserve the generated design and alpha channel.
+
+Use case: logo-brand.
+Asset type: production Windows desktop app icon for 续订 / Xuding, a calm, local-first subscription manager.
+Primary request: design one original, polished application icon. The visual concept is a continuous folded subscription card ribbon: a single broad ivory and pale mint band curves into a compact upright interlocking loop, with two soft rectangular turns and a deliberate dark negative-space opening. It should suggest recurring subscriptions and orderly continuity. Create a distinctive simple silhouette, not the conventional two refresh arrows. No letters, no text, no numbers, no currency symbol.
+Style: precise contemporary vector-like brand design, optically balanced rounded geometry, mostly flat, with only subtle two-tone fold shading to describe one overlap. Restrained, professional, friendly.
+Palette: deep forest-green rounded-square tile (#245B43 to #173E30, extremely subtle tonal variation), warm ivory main band (#F5F6ED), pale mint folded portion (#B9DEC4).
+Composition: a single centered icon, square 1024x1024 canvas. Rounded-square tile fills approximately 94% of canvas width, with truly transparent outer corners and a narrow even transparent margin. Large bold central emblem occupies about 64% of tile width. Thick shapes and open negative spaces must remain legible at 16, 24 and 32 pixels. Front-facing, no perspective.
+Avoid: presentation boards, multiple variants, mockup backgrounds, captions, thin lines, tiny details, ornamental strokes, glossy plastic, heavy 3D, long shadows, drop shadows outside tile, watermark. Output only the final ready-to-use icon with actual alpha transparency.
